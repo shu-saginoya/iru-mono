@@ -2,19 +2,18 @@
 
 ## 1. 概要
 
-IRU-MONO の REST API 仕様書です。
-Next.js API Routes によって実装されるエンドポイントを定義します。
+IRU-MONO の API 仕様書です。
+認証とセッション管理は Supabase Auth に委譲し、アプリケーション API はリスト、メンバー、タグ、アイテムの操作を提供します。
 
 本仕様では、以下を前提とします。
 
-- ユーザーは個人でアカウントを登録できる
+- ユーザーは Google アカウントで認証する
+- アプリケーションは Google のパスワードを扱わない
+- Supabase Auth のセッションを Cookie で利用する
 - ユーザーは複数のリストを作成・利用できる
-- リスト作成者は他のユーザーを参加させることができる
 - タグとアイテムはユーザーではなくリストに所属する
 - 同じリストのメンバーがタグとアイテムを共有する
-- 認証は JWT + httpOnly Cookie を使用する
-- 完了済みアイテムは自動削除のみとし、手動削除は禁止する
-- リアルタイム同期はリスト単位で行う
+- リアルタイム同期は Supabase Realtime でリスト単位に行う
 
 ---
 
@@ -29,22 +28,42 @@ https://iru-mono.vercel.app/api  (本番環境)
 
 ## 3. 認証方式
 
-### 3.1 認証方針
+### 3.1 Google OAuth
 
-- 認証方式: JWT
-- 保存場所: httpOnly Cookie
-- 有効期限: 7 日間
-- API 呼び出し時は Cookie を自動送信する
-- ローカル開発時のみ `Authorization: Bearer <token>` を許容する
+ログイン開始は Supabase Auth Client から行う。
 
-### 3.2 認証済みリクエスト
+```ts
+await supabase.auth.signInWithOAuth({
+  provider: "google",
+  options: {
+    redirectTo: `${location.origin}/auth/callback`,
+  },
+});
+```
+
+### 3.2 コールバック
+
+`GET /auth/callback` で OAuth の認証コードを Supabase セッションへ交換する。
+
+- 認証コード交換は Supabase SSR クライアントで行う
+- セッションは httpOnly Cookie として扱う
+- 初回ログイン時にアプリ側の `User` レコードを作成または更新する
+- パスワード、Google のアクセストークン、プロバイダー秘密情報をアプリ DB に保存しない
+
+### 3.3 ログアウト
+
+`POST /auth/logout` で Supabase Auth のセッションを終了する。
+
+### 3.4 認証済みリクエスト
 
 ```bash
 curl -X GET http://localhost:3000/api/lists \
-  --cookie "access_token=YOUR_JWT"
+  --cookie "sb-<project-ref>-auth-token=SESSION_COOKIE"
 ```
 
-### 3.3 認証失敗時
+API は Supabase セッションから現在のユーザー ID を取得する。クライアントから `userId` や `listId` を受け取って認証対象を決定しない。
+
+### 3.5 認証失敗時
 
 ```json
 {
@@ -59,45 +78,21 @@ curl -X GET http://localhost:3000/api/lists \
 
 ### 4.1 リソーススコープ
 
-- `User` は個人アカウントとして管理する
-- `List` はユーザーが作成する共有リソースである
+- `User` は Supabase Auth のユーザー ID と対応するアプリ側プロフィールである
 - `ListMember` に登録されたユーザーだけが、そのリストのデータへアクセスできる
 - `Tag` と `Item` は必ず `listId` を持つ
-- リスト ID は URL の `:listId` またはリスト作成・取得レスポンスで扱う
-- 別のリストに属するタグ・アイテム ID を指定した場合は `403 Forbidden` または `404 Not Found` を返す
+- リスト ID は URL の `:listId` で扱う
+- 所属していないリストへのアクセスは `403 Forbidden` または `404 Not Found` を返す
+- API と Supabase Row Level Security の両方で所属確認を行う
 
 ### 4.2 共通レスポンス
 
-#### 単一オブジェクト
-
 ```json
 {
-  "id": "list_001",
-  "name": "日常の買い物"
-}
-```
-
-#### コレクション
-
-```json
-{
-  "data": [
-    {
-      "id": "list_001",
-      "name": "日常の買い物"
-    }
-  ],
-  "total": 1,
+  "data": [],
+  "total": 0,
   "limit": 20,
   "offset": 0
-}
-```
-
-#### 成功メッセージ
-
-```json
-{
-  "message": "Operation completed successfully"
 }
 ```
 
@@ -131,19 +126,20 @@ curl -X GET http://localhost:3000/api/lists \
 
 ### 5.1 認証
 
-| メソッド | エンドポイント | 説明                               |
-| -------- | -------------- | ---------------------------------- |
-| POST     | `/auth/signup` | ユーザー登録                       |
-| POST     | `/auth/login`  | ログイン                           |
-| POST     | `/auth/logout` | ログアウト                         |
-| GET      | `/auth/me`     | 自分のプロフィールと所属リスト取得 |
+| メソッド | エンドポイント   | 説明                               |
+| -------- | ---------------- | ---------------------------------- |
+| GET      | `/auth/callback` | Google OAuth コールバック          |
+| POST     | `/auth/logout`   | Supabase Auth セッション終了       |
+| GET      | `/auth/me`       | 自分のプロフィールと所属リスト取得 |
+
+Google OAuth の開始処理は Supabase Client の `signInWithOAuth` を使用し、アプリ API の `POST /auth/login` は用意しない。
 
 ### 5.2 リスト
 
 | メソッド | エンドポイント                   | 説明                         |
 | -------- | -------------------------------- | ---------------------------- |
 | GET      | `/lists`                         | 自分が所属するリスト一覧取得 |
-| POST     | `/lists`                         | リスト作成                   |
+| POST     | `/lists`                         | リスト作成。作成者を自動参加 |
 | GET      | `/lists/:listId`                 | リスト情報とメンバー取得     |
 | PUT      | `/lists/:listId`                 | リスト名更新                 |
 | DELETE   | `/lists/:listId`                 | リスト削除                   |
@@ -172,76 +168,25 @@ curl -X GET http://localhost:3000/api/lists \
 
 ---
 
-## 6. 詳細仕様
+## 6. 認証 API
 
-### 6.1 POST `/auth/signup`
+### 6.1 GET `/auth/callback`
 
-**説明**: 個人ユーザーを登録する。リストは自動作成しない。
+**説明**: Google OAuth の認証コードを Supabase セッションへ交換する。
 
-**認証**: 不要
+**認証**: Supabase OAuth からのリダイレクトのみ
 
-**リクエスト**:
+**動作**:
 
-```json
-{
-  "username": "taro",
-  "password": "password123"
-}
-```
+1. `code` クエリパラメータを取得する
+2. Supabase SSR クライアントで `exchangeCodeForSession(code)` を実行する
+3. セッション Cookie を設定する
+4. Supabase Auth のユーザー情報からアプリ側 `User` を作成または更新する
+5. アプリ画面へリダイレクトする
 
-**レスポンス (201 Created)**:
+### 6.2 POST `/auth/logout`
 
-```json
-{
-  "id": "usr_001",
-  "username": "taro",
-  "createdAt": "2026-08-17T10:00:00Z"
-}
-```
-
-**バリデーション**:
-
-- `username`: 3〜20 文字、英数字とアンダースコアのみ
-- `password`: 8〜255 文字
-- `username` は一意
-
-**Cookie 設定**:
-
-- `access_token=<JWT>`
-- `httpOnly: true`
-- `sameSite: lax`
-- `secure: true`（本番）
-
-### 6.2 POST `/auth/login`
-
-**説明**: ユーザーを認証し、Cookie に JWT を設定する。
-
-**認証**: 不要
-
-**リクエスト**:
-
-```json
-{
-  "username": "taro",
-  "password": "password123"
-}
-```
-
-**レスポンス (200 OK)**:
-
-```json
-{
-  "id": "usr_001",
-  "username": "taro",
-  "createdAt": "2026-08-17T10:00:00Z"
-}
-```
-
-**エラー**: `401 INVALID_CREDENTIALS`
-
-### 6.3 POST `/auth/logout`
-
-**説明**: 現在のセッションを終了し、Cookie を削除する。
+**説明**: Supabase Auth の現在のセッションを終了する。
 
 **認証**: 必須
 
@@ -253,9 +198,9 @@ curl -X GET http://localhost:3000/api/lists \
 }
 ```
 
-### 6.4 GET `/auth/me`
+### 6.3 GET `/auth/me`
 
-**説明**: 自分のユーザー情報と所属リストを取得する。
+**説明**: Supabase Auth のユーザー情報とアプリ側プロフィール、所属リストを取得する。
 
 **認証**: 必須
 
@@ -263,8 +208,9 @@ curl -X GET http://localhost:3000/api/lists \
 
 ```json
 {
-  "id": "usr_001",
-  "username": "taro",
+  "id": "google-user-uuid",
+  "displayName": "Taro",
+  "avatarUrl": "https://example.com/avatar.png",
   "lists": [
     {
       "id": "list_001",
@@ -287,35 +233,9 @@ curl -X GET http://localhost:3000/api/lists \
 
 **認証**: 必須
 
-**レスポンス (200 OK)**:
-
-```json
-{
-  "data": [
-    {
-      "id": "list_001",
-      "name": "日常の買い物",
-      "memberCount": 2,
-      "joinedAt": "2026-08-17T10:00:00Z"
-    },
-    {
-      "id": "list_002",
-      "name": "旅行用品",
-      "memberCount": 1,
-      "joinedAt": "2026-08-17T10:05:00Z"
-    }
-  ],
-  "total": 2,
-  "limit": 20,
-  "offset": 0
-}
-```
-
 ### 7.2 POST `/lists`
 
 **説明**: 新しいリストを作成する。作成者は自動的にメンバーになる。
-
-**認証**: 必須
 
 **リクエスト**:
 
@@ -325,57 +245,19 @@ curl -X GET http://localhost:3000/api/lists \
 }
 ```
 
-**レスポンス (201 Created)**:
+**バリデーション**: `name` は 1〜100 文字。
 
-```json
-{
-  "id": "list_001",
-  "name": "日常の買い物",
-  "createdAt": "2026-08-17T10:00:00Z",
-  "updatedAt": "2026-08-17T10:00:00Z",
-  "members": [
-    {
-      "userId": "usr_001",
-      "username": "taro",
-      "joinedAt": "2026-08-17T10:00:00Z"
-    }
-  ]
-}
-```
-
-**バリデーション**:
-
-- `name`: 1〜100 文字、必須
+**レスポンス**: 作成された `List` と作成者の `ListMember`（`201 Created`）
 
 ### 7.3 GET `/lists/:listId`
 
 **説明**: 所属しているリストの情報とメンバーを取得する。
 
-**認証**: 必須
-
-**レスポンス (200 OK)**:
-
-```json
-{
-  "id": "list_001",
-  "name": "日常の買い物",
-  "members": [
-    {
-      "userId": "usr_001",
-      "username": "taro",
-      "joinedAt": "2026-08-17T10:00:00Z"
-    }
-  ],
-  "createdAt": "2026-08-17T10:00:00Z",
-  "updatedAt": "2026-08-17T10:00:00Z"
-}
-```
+**認証**: 対象リストのメンバーであること
 
 ### 7.4 PUT `/lists/:listId`
 
 **説明**: リスト名を更新する。
-
-**認証**: 必須
 
 **リクエスト**:
 
@@ -385,61 +267,41 @@ curl -X GET http://localhost:3000/api/lists \
 }
 ```
 
-**レスポンス**: 更新後の `List` オブジェクト（`200 OK`）
-
 ### 7.5 DELETE `/lists/:listId`
 
 **説明**: リストと所属メンバー、リスト内のタグ・アイテムを削除する。
 
-**認証**: 必須
+**権限**: リスト作成者のみ
 
 **レスポンス**: `204 No Content`
 
-**注記**: 作成者の削除権限や、作成者が退会する場合の扱いは今後確定する。
-
 ### 7.6 POST `/lists/:listId/members`
 
-**説明**: 指定したユーザーをリストに参加させる。
+**説明**: 指定したアプリ側ユーザーをリストに参加させる。
 
-**認証**: 必須
+**権限**: リスト作成者のみ
 
 **リクエスト**:
 
 ```json
 {
-  "userId": "usr_002"
+  "userId": "google-user-uuid"
 }
 ```
 
-**レスポンス (201 Created)**:
-
-```json
-{
-  "listId": "list_001",
-  "userId": "usr_002",
-  "joinedAt": "2026-08-17T10:10:00Z"
-}
-```
-
-**エラー**:
-
-- `404 USER_NOT_FOUND`
-- `409 MEMBER_ALREADY_EXISTS`
-- `403 FORBIDDEN`（参加させる権限がない場合）
+**エラー**: `404 USER_NOT_FOUND`、`409 MEMBER_ALREADY_EXISTS`、`403 FORBIDDEN`
 
 ### 7.7 DELETE `/lists/:listId/members/:userId`
 
 **説明**: 指定したユーザーをリストから除外する。
 
-**認証**: 必須
+**権限**: リスト作成者のみ
 
 **レスポンス**: `204 No Content`
 
 ### 7.8 DELETE `/lists/:listId/membership`
 
 **説明**: 自分自身がリストから退会する。
-
-**認証**: 必須
 
 **レスポンス**: `204 No Content`
 
@@ -449,34 +311,11 @@ curl -X GET http://localhost:3000/api/lists \
 
 ### 8.1 GET `/lists/:listId/tags`
 
-**説明**: リストのタグ一覧を取得する。
-
-**認証**: 対象リストのメンバーであること
-
-**レスポンス例**:
-
-```json
-{
-  "data": [
-    {
-      "id": "tag_001",
-      "name": "スーパー",
-      "listId": "list_001",
-      "createdAt": "2026-08-17T10:00:00Z",
-      "updatedAt": "2026-08-17T10:00:00Z"
-    }
-  ],
-  "total": 1,
-  "limit": 50,
-  "offset": 0
-}
-```
+リストのメンバーがタグ一覧を取得する。レスポンスには `id`、`name`、`listId`、作成日時、更新日時を含める。
 
 ### 8.2 POST `/lists/:listId/tags`
 
-**説明**: リストにタグを作成する。
-
-**リクエスト**:
+リストのメンバーがタグを作成する。
 
 ```json
 {
@@ -484,32 +323,17 @@ curl -X GET http://localhost:3000/api/lists \
 }
 ```
 
-**バリデーション**:
-
 - `name`: 1〜50 文字
 - 同じリスト内で重複不可
-
-**エラー**: `409 TAG_ALREADY_EXISTS`
+- 重複時は `409 TAG_ALREADY_EXISTS`
 
 ### 8.3 PUT `/lists/:listId/tags/:tagId`
 
-**説明**: リスト内のタグ名を更新する。
-
-**リクエスト**:
-
-```json
-{
-  "name": "ドラッグストア"
-}
-```
-
-**レスポンス**: 更新後の `Tag` オブジェクト（`200 OK`）
+リストのメンバーがタグ名を更新する。
 
 ### 8.4 DELETE `/lists/:listId/tags/:tagId`
 
-**説明**: タグを削除し、関連する `ItemTag` も削除する。
-
-**レスポンス**: `204 No Content`
+タグと関連する `ItemTag` を削除する。レスポンスは `204 No Content`。
 
 ---
 
@@ -517,51 +341,21 @@ curl -X GET http://localhost:3000/api/lists \
 
 ### 9.1 GET `/lists/:listId/items`
 
-**説明**: リストのアイテム一覧を取得する。
+リストのメンバーがアイテム一覧を取得する。
 
-**クエリパラメータ**:
+クエリパラメータ:
 
-| パラメータ | 型     | デフォルト       | 説明                                                    |
-| ---------- | ------ | ---------------- | ------------------------------------------------------- |
-| `status`   | string | `pending`        | `pending` / `completed` / `all`                         |
-| `tagId`    | string | なし             | タグフィルター。複数指定可                              |
-| `sort`     | string | `createdAt:desc` | `createdAt:asc` / `createdAt:desc` / `completedAt:desc` |
-| `limit`    | number | `50`             | 最大 100                                                |
-| `offset`   | number | `0`              | オフセット                                              |
-
-**レスポンス例**:
-
-```json
-{
-  "data": [
-    {
-      "id": "itm_001",
-      "title": "牛乳",
-      "quantity": 1,
-      "isCompleted": false,
-      "listId": "list_001",
-      "completedAt": null,
-      "tags": [
-        {
-          "id": "tag_001",
-          "name": "スーパー"
-        }
-      ],
-      "createdAt": "2026-08-17T10:00:00Z",
-      "updatedAt": "2026-08-17T10:00:00Z"
-    }
-  ],
-  "total": 1,
-  "limit": 50,
-  "offset": 0
-}
-```
+| パラメータ | 型     | デフォルト       | 説明                             |
+| ---------- | ------ | ---------------- | -------------------------------- |
+| `status`   | string | `pending`        | `pending` / `completed` / `all`  |
+| `tagId`    | string | なし             | タグフィルター。複数指定可       |
+| `sort`     | string | `createdAt:desc` | 作成日・更新日・完了日時でソート |
+| `limit`    | number | `50`             | 最大 100                         |
+| `offset`   | number | `0`              | オフセット                       |
 
 ### 9.2 POST `/lists/:listId/items`
 
-**説明**: リストにアイテムを作成する。
-
-**リクエスト**:
+リストのメンバーがアイテムを作成する。
 
 ```json
 {
@@ -571,102 +365,35 @@ curl -X GET http://localhost:3000/api/lists \
 }
 ```
 
-**バリデーション**:
-
-- `title`: 1〜255 文字、必須
+- `title`: 1〜255 文字
 - `quantity`: 1〜999 の整数
 - `tagIds`: 配列。空配列可
 - すべての `tagIds` は対象リストに属している必要がある
 
-**レスポンス**: 作成された `Item` オブジェクト（`201 Created`）
-
 ### 9.3 PUT `/lists/:listId/items/:itemId`
 
-**説明**: アイテムの内容とタグを更新する。
-
-**リクエスト**:
-
-```json
-{
-  "title": "低脂肪牛乳",
-  "quantity": 2,
-  "tagIds": ["tag_001"]
-}
-```
-
-**レスポンス**: 更新された `Item` オブジェクト（`200 OK`）
+リストのメンバーがアイテムの内容とタグを更新する。
 
 ### 9.4 PATCH `/lists/:listId/items/:itemId/toggle`
 
-**説明**: アイテムの完了状態を切り替える。
-
-**リクエスト**: ボディなし
-
-**動作**:
+リストのメンバーが完了状態を切り替える。
 
 - `false` → `true`: `completedAt` を現在時刻に設定
 - `true` → `false`: `completedAt` を `null` に設定
-- 完了済みアイテムは 30 日後の自動削除対象となる
-
-**レスポンス**: 更新された `Item` オブジェクト（`200 OK`）
 
 ### 9.5 DELETE `/lists/:listId/items/:itemId`
 
-**説明**: 未完了アイテムを削除する。
-
-**制約**:
-
-- `isCompleted === true` のアイテムは手動削除不可
-
-**エラー**: `409 COMPLETED_ITEM_CANNOT_BE_DELETED`
-
-**レスポンス**: `204 No Content`
+未完了アイテムのみ手動削除できる。完了済みアイテムは `409 COMPLETED_ITEM_CANNOT_BE_DELETED`。
 
 ---
 
-## 10. WebSocket（リアルタイム同期）
+## 10. Supabase Realtime
 
-### 10.1 接続と認証
-
-```javascript
-const socket = io("https://iru-mono.vercel.app", {
-  auth: { token: "JWT_TOKEN" }
-});
-```
-
-- JWT を検証し、ユーザーが所属するリストのルームへ参加させる
-- イベントは該当リストのメンバーだけに配信する
-- 異なるリストのイベントは配信しない
-
-### 10.2 イベント一覧
-
-イベント名は `list:` プレフィックスで統一する。
-
-```javascript
-socket.on("list:item:created", (item) => {
-  console.log("Item created:", item);
-});
-
-socket.on("list:item:updated", (item) => {
-  console.log("Item updated:", item);
-});
-
-socket.on("list:item:deleted", (itemId) => {
-  console.log("Item deleted:", itemId);
-});
-
-socket.on("list:tag:created", (tag) => {
-  console.log("Tag created:", tag);
-});
-
-socket.on("list:tag:updated", (tag) => {
-  console.log("Tag updated:", tag);
-});
-
-socket.on("list:tag:deleted", (tagId) => {
-  console.log("Tag deleted:", tagId);
-});
-```
+- 対象テーブルは `Tag`、`Item`、`ItemTag` とする
+- リスト画面を開いたクライアントは対象 `listId` の変更を購読する
+- RLS と購読条件により、所属していないリストの変更を受け取らない
+- イベントは `INSERT`、`UPDATE`、`DELETE` を扱う
+- Socket.io の独自イベントは使用しない
 
 ---
 
@@ -674,8 +401,7 @@ socket.on("list:tag:deleted", (tagId) => {
 
 | コード                             | 意味                               |
 | ---------------------------------- | ---------------------------------- |
-| `UNAUTHORIZED`                     | 認証されていない                   |
-| `INVALID_CREDENTIALS`              | ログイン失敗                       |
+| `UNAUTHORIZED`                     | Supabase セッションがない          |
 | `VALIDATION_ERROR`                 | バリデーション失敗                 |
 | `NOT_FOUND`                        | 対象が存在しない                   |
 | `USER_NOT_FOUND`                   | ユーザーが存在しない               |
@@ -692,10 +418,10 @@ socket.on("list:tag:deleted", (tagId) => {
 
 ### フェーズ1: 認証・リスト・メンバー
 
-- [ ] `POST /auth/signup`
-- [ ] `POST /auth/login`
-- [ ] `POST /auth/logout`
-- [ ] `GET /auth/me`
+- [ ] Supabase Google OAuth
+- [ ] `/auth/callback`
+- [ ] `/auth/logout`
+- [ ] `/auth/me`
 - [ ] `GET /lists`
 - [ ] `POST /lists`
 - [ ] `GET /lists/:listId`
@@ -710,18 +436,10 @@ socket.on("list:tag:deleted", (tagId) => {
 - [ ] 完了切り替え
 - [ ] タグフィルター
 
-### フェーズ3: リアルタイム同期
+### フェーズ3: リアルタイムと運用
 
-- [ ] Socket.io 接続
-- [ ] JWT 認証
-- [ ] リストルームへの参加
-- [ ] `list:item:*` イベント
-- [ ] `list:tag:*` イベント
-
-### フェーズ4: 運用
-
-- [ ] 完了アイテム自動削除バッチ
+- [ ] Supabase Realtime 購読
+- [ ] 完了アイテム自動削除処理
 - [ ] エラーログ・モニタリング
-- [ ] レート制限
 
 最終更新: 2026年8月17日

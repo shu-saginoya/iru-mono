@@ -3,41 +3,33 @@
 ## 概要
 
 IRU-MONO の技術スタックおよび構成についてのドキュメントです。
-低コスト、シンプル、スケーラブルな設計を重視しています。
+個人開発での実装・運用のしやすさと、AI エージェントが一貫して実装できる構成を優先します。
 
 ---
 
 ## 推奨技術スタック
 
-### フロントエンド・バックエンド（統合）
+| 分野             | 選定技術                                  | 採用理由                                                        |
+| ---------------- | ----------------------------------------- | --------------------------------------------------------------- |
+| フレームワーク   | Next.js（App Router）                     | UI とサーバー処理を一つのプロジェクトで管理できる               |
+| 言語             | TypeScript                                | 型情報を共有でき、AI エージェントも実装方針を追いやすい         |
+| UI/CSS           | Tailwind CSS                              | 追加設定が少なく、画面実装を速く進められる                      |
+| パッケージ管理   | pnpm                                      | 依存関係とスクリプトを一元管理できる                            |
+| 認証             | Supabase Auth（Google OAuth）             | パスワード管理・OAuth・セッション管理を外部化できる             |
+| データベース     | Supabase PostgreSQL                       | DB の作成・接続・バックアップをサービス側で管理できる           |
+| DB クライアント  | `@supabase/ssr` + `@supabase/supabase-js` | Next.js の Server/Client Components と Supabase Auth に対応する |
+| 入力検証         | Zod                                       | API とフォームの入力条件を同じスキーマで管理できる              |
+| リアルタイム通信 | Supabase Realtime                         | Socket.io 用の常時接続サーバーを別途運用しなくてよい            |
+| ホスティング     | Vercel                                    | Next.js と統合しやすく、個人開発の初期運用が軽い                |
+| テスト           | Vitest + Testing Library + Playwright     | 単体・コンポーネント・主要画面の動作を分けて検証できる          |
+| バージョン管理   | Git / GitHub                              | AI エージェントによる差分確認と復旧がしやすい                   |
 
-| 項目                  | 選定技術                     | 理由                                                            |
-| --------------------- | ---------------------------- | --------------------------------------------------------------- |
-| **フレームワーク**    | Next.js                      | React ベース、フルスタックフレームワーク、API Routes で統一管理 |
-| **言語**              | TypeScript                   | 型安全性、開発効率向上                                          |
-| **UI/CSS**            | Tailwind CSS                 | レスポンシブデザイン実装が簡単                                  |
-| **パッケージ管理**    | pnpm                         | 高速、ディスク効率、依存関係管理が厳密                          |
-| **状態管理**          | Zustand または React Context | シンプルな状態管理                                              |
-| **HTTP クライアント** | fetch API または axios       | API 通信の実装                                                  |
-| **リアルタイム通信**  | Socket.io                    | WebSocket 対応、フォールバック機能                              |
-| **ホスティング**      | Vercel                       | 無料、自動デプロイ、Next.js 最適化                              |
+### 初期段階で採用しないもの
 
-### データベース
-
-| 項目                   | 選定技術                | 理由                                            |
-| ---------------------- | ----------------------- | ----------------------------------------------- |
-| **DBMS**               | PostgreSQL              | リレーショナル、安定性、無料ホスティング対応    |
-| **ORM/クエリビルダー** | Prisma                  | TypeScript 対応、マイグレーション自動化、型安全 |
-| **ホスティング**       | Railway または Supabase | PostgreSQL 無料プラン対応                       |
-
-### その他
-
-| 項目                 | 選定技術                     | 理由                         |
-| -------------------- | ---------------------------- | ---------------------------- |
-| **環境変数管理**     | .env.local                   | Next.js ネイティブサポート   |
-| **API ドキュメント** | Swagger/OpenAPI              | API 仕様書自動生成           |
-| **テスト**           | Jest + React Testing Library | 標準的なテストフレームワーク |
-| **バージョン管理**   | Git / GitHub                 | 本プロジェクトで利用中       |
+- Prisma: Supabase Client と役割が重複するため、初期構築では使わない
+- Socket.io: Supabase Realtime で代替できるため、専用サーバーを作らない
+- Zustand: 状態管理が必要になるまで導入しない
+- Swagger/OpenAPI: API が安定してから導入する
 
 ---
 
@@ -45,227 +37,182 @@ IRU-MONO の技術スタックおよび構成についてのドキュメント�
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
-│              Next.js（フロントエンド + バックエンド）      │
-│  - Pages / App Router（UI レンダリング）                  │
-│  - API Routes（/app/api/...）                           │
-│  - Middleware（認証・ロギング）                           │
-│  - TypeScript                                           │
-│  - Tailwind CSS                                         │
-│  ホスティング: Vercel                                     │
-└────────────────────┬─────────────────────────────────────┘
-                     │
-         ┌───────────┴───────────┐
-         │                       │
-    REST API (fetch)   WebSocket (Socket.io)
-    (/api/...)         (リアルタイム同期)
-         │                       │
-┌────────────────────────────────────────────────────────┐
-│              Next.js API Routes                         │
-│  - ユーザー認証 (JWT)                                   │
-│  - CRUD エンドポイント                                  │
-│  - ビジネスロジック                                     │
-│  - WebSocket ハンドラー                                 │
-└────────────────────┬─────────────────────────────────┘
-                     │
-                  SQL
-                     │
-┌────────────────────────────────────────────────────────┐
-│           データベース層                                 │
-│  PostgreSQL + Prisma ORM                                │
-│  - ユーザー情報                                         │
-│  - タグ                                                 │
-│  - アイテム                                             │
-│  - アイテム＿タグ（中間テーブル）                        │
-│  ホスティング: Railway / Supabase                       │
-└────────────────────────────────────────────────────────┘
+│                 Next.js（Vercel）                        │
+│  - App Router                                            │
+│  - Server / Client Components                            │
+│  - Route Handlers（/app/api/...）                        │
+│  - Supabase SSR クライアント                             │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+       Auth         Database      Realtime
+          │            │            │
+┌─────────▼──────────▼────────────▼───────────────────────┐
+│                       Supabase                           │
+│  - Google OAuth / セッション管理                         │
+│  - PostgreSQL                                            │
+│  - Row Level Security                                    │
+│  - Realtime                                              │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## 認証フロー
 
-1. ユーザーがログイン画面でユーザー名/パスワードを入力
-2. Next.js API Routes で bcrypt によりパスワードを検証
-3. 検証成功時、JWT を発行して httpOnly Cookie に設定
-4. ブラウザが以降の API リクエストへ Cookie を自動送信
-5. Next.js Middleware または API 共通処理で Cookie の JWT を検証
-6. ローカル開発時のみ、必要に応じて `Authorization: Bearer <token>` を許容
+1. ユーザーが「Google でログイン」を選択する
+2. Supabase Auth が Google OAuth の認証画面へ遷移させる
+3. Google の認証成功後、Supabase がセッションを発行する
+4. Next.js の Supabase SSR クライアントがセッションを Cookie として扱う
+5. Server Components と Route Handlers が Supabase のセッションからユーザーを取得する
+6. 初回ログイン時にアプリ側の `User` レコードを作成または更新する
+
+アプリケーションが Google のパスワードを扱うことはありません。
+
+---
+
+## データアクセス方針
+
+- アプリ側のユーザー ID は Supabase Auth のユーザー ID と一致させる
+- `ListMember` による所属確認を API とデータベースの両方で行う
+- Supabase の Row Level Security を有効にする
+- `Tag` と `Item` は `listId` を基準にアクセスする
+- API の認可条件を `lib/authorization.ts` などに集約する
+- Supabase のサービスロールキーはサーバー専用とし、ブラウザへ渡さない
 
 ---
 
 ## リアルタイム同期フロー
 
 ```text
-ユーザーA          ユーザーB
-  │                 │
-  └─ API リクエスト → Next.js API Routes
-                      │
-                  DB 更新（Prisma）
-                      │
-              WebSocket で同じリストのメンバーに通知
-                      │
-            ┌─────────┴─────────┐
-            │                   │
-        ユーザーA        ユーザーB
-       （UI 更新）      （UI 更新）
+ユーザーA
+  │
+  └─ Route Handler → Supabase PostgreSQL 更新
+                           │
+                    Supabase Realtime
+                           │
+              同じ listId の購読クライアント
+                    ┌──────┴──────┐
+                ユーザーA       ユーザーB
+                 （UI 更新）     （UI 更新）
 ```
 
----
-
-## 月額コスト見積もり
-
-### パターン1: 完全無料（推奨）
-
-| サービス           | 料金   | 備考                                       |
-| ------------------ | ------ | ------------------------------------------ |
-| Vercel             | 無料   | フロントエンド + バックエンド ホスティング |
-| Railway / Supabase | 無料   | PostgreSQL（Free Tier）                    |
-| **合計**           | **¥0** | -                                          |
-
-### パターン2: スケール時（有料オプション）
-
-| サービス           | 料金               | 備考                         |
-| ------------------ | ------------------ | ---------------------------- |
-| Vercel Pro         | $20/月             | 必要に応じて（現状では不要） |
-| Railway / Supabase | $5～10/月          | DB スケーリング時            |
-| **合計**           | **¥300～1,500/月** | 小規模なリスト共有では不要   |
+- リスト画面を開いたとき、対象 `listId` の変更を購読する
+- `INSERT`、`UPDATE`、`DELETE` の対象を画面状態へ反映する
+- RLS と購読条件により、所属していないリストの変更を受け取らない
 
 ---
 
-## 開発環境セットアップ
+## 環境変数
+
+```text
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+- `NEXT_PUBLIC_*` はクライアントで利用可能な値
+- `SUPABASE_SERVICE_ROLE_KEY` はサーバー専用の秘密情報
+- `.env.local` は Git にコミットしない
+
+---
+
+## ローカル開発環境
 
 ### 前提条件
 
-- Node.js (最新 LTS版)
+- Node.js 最新 LTS
 - pnpm
-- PostgreSQL ローカルインスタンス（開発環境）
+- Supabase プロジェクト
+- Google OAuth の開発用設定
 - Git
 
 ### ローカル実行コマンド（予定）
 
 ```bash
-# リポジトリクローン
-git clone https://github.com/shu-saginoya/iru-mono.git
-cd iru-mono
-
-# 依存パッケージをインストール
 pnpm install
-
-# 環境変数設定
-cp .env.example .env.local
-
-# データベース マイグレーション
-pnpm run db:migrate
-
-# ローカル開発サーバー起動
-pnpm run dev
-
-# テスト実行
-pnpm run test
+pnpm dev
+pnpm test
+pnpm exec playwright test
 ```
+
+DB マイグレーションは Supabase SQL Editor または Supabase CLI で管理します。
 
 ---
 
 ## デプロイフロー
 
-### Vercel への自動デプロイ
-
 ```text
 GitHub に push
   ↓
-Vercel が自動検出・ビルド（Next.js 最適化）
+Vercel が Next.js をビルド
   ↓
-フロントエンド + バックエンド を本番環境にデプロイ完了
+環境変数を使って Supabase に接続
+  ↓
+Vercel にデプロイ完了
 ```
-
-**メリット**:
-
-- フロントエンドとバックエンドの同時デプロイ
-- Edge Functions で低遅延化
-- 自動スケーリング
-- 環境変数の安全管理
 
 ---
 
 ## セキュリティ対策
 
-| 対策                         | 実装方法                             |
-| ---------------------------- | ------------------------------------ |
-| **HTTPS**                    | Vercel で自動対応                    |
-| **パスワード暗号化**         | bcrypt で hash 化、平文保存なし      |
-| **JWT トークン**             | 署名付き、有効期限設定               |
-| **CORS設定**                 | Next.js Middleware で制御            |
-| **入力検証**                 | バリデーションライブラリ（Zod など） |
-| **SQL インジェクション対策** | Prisma ORM で自動対応                |
-| **XSS 対策**                 | React の自動エスケープ               |
-| **CSRF 対策**                | SameSite Cookie 設定                 |
+| 対策                     | 実装方法                                              |
+| ------------------------ | ----------------------------------------------------- |
+| OAuth                    | Supabase Auth と Google OAuth に委譲                  |
+| セッション               | Supabase SSR クライアントと Cookie で管理             |
+| 認可                     | `ListMember` と Row Level Security で list 単位に制限 |
+| 入力検証                 | Zod                                                   |
+| SQL インジェクション対策 | Supabase Client のパラメータ化クエリ                  |
+| 秘密情報                 | サービスロールキーをサーバー環境変数だけに保存        |
+| HTTPS                    | Vercel と Supabase の標準機能を利用                   |
+| XSS                      | React の自動エスケープと入力検証                      |
+| CSRF                     | Supabase SSR のセッション方式と SameSite Cookie       |
+
+---
+
+## AI エージェント向けの開発方針
+
+- 機能ごとに Route Handler、UI、バリデーション、テストを近い単位で実装する
+- DB 変更は SQL マイグレーションとして管理する
+- 認証・認可処理は共通ヘルパーを利用し、各 API に重複実装しない
+- Supabase の型定義を生成し、DB の型を手書きで重複させない
+- 1 回の変更範囲を小さくし、変更後に lint・型チェック・テストを実行する
+- 環境変数や OAuth 設定はコードに直接書かない
 
 ---
 
 ## 実装の優先順位
 
-### フェーズ1: MVP（最小機能リリース）
+### フェーズ1: プロジェクトと認証
 
-- [ ] プロジェクト初期化（Next.js + Prisma + PostgreSQL）
-- [ ] ユーザー認証（ログイン/ログアウト）
-- [ ] タグの CRUD（作成、表示、削除）
-- [ ] アイテムの CRUD（作成、表示、編集、削除）
-- [ ] チェック機能（完了/未完了）
+- [ ] Next.js プロジェクト初期化
+- [ ] Supabase プロジェクト接続
+- [ ] Google OAuth 設定
+- [ ] Supabase Auth によるログイン・ログアウト
+- [ ] アプリ側 `User` の同期
+
+### フェーズ2: リストとメンバー
+
+- [ ] `List` と `ListMember` の SQL マイグレーション
+- [ ] RLS ポリシー
+- [ ] リスト作成・一覧・更新
+- [ ] メンバー参加処理
+
+### フェーズ3: タグとアイテム
+
+- [ ] タグ CRUD
+- [ ] アイテム CRUD
+- [ ] 完了切り替え
 - [ ] タグフィルター
 
-### フェーズ2: リアルタイム機能
+### フェーズ4: リアルタイムと運用
 
-- [ ] WebSocket でリアルタイム同期
-- [ ] 複数デバイス間での更新通知
-
-### フェーズ3: 運用機能
-
-- [ ] 完了アイテムの自動削除バッチ処理
-- [ ] ロギング・モニタリング
-- [ ] エラーハンドリング改善
-
----
-
-## フォルダ構成（例）
-
-```text
-iru-mono/
-├── app/
-│   ├── api/
-│   │   ├── auth/              # 認証関連エンドポイント
-│   │   ├── tags/              # タグ CRUD エンドポイント
-│   │   ├── items/             # アイテム CRUD エンドポイント
-│   │   └── socket.io.ts       # WebSocket サーバー
-│   ├── (auth)/
-│   │   └── login/             # ログイン画面
-│   ├── dashboard/             # メイン画面
-│   ├── layout.tsx             # ルートレイアウト
-│   └── page.tsx               # ホーム
-├── components/                # React コンポーネント
-├── lib/
-│   ├── prisma.ts              # Prisma クライアント
-│   ├── auth.ts                # 認証ユーティリティ
-│   └── validators.ts          # 入力検証
-├── middleware.ts              # Next.js Middleware
-├── prisma/
-│   └── schema.prisma          # DB スキーマ定義
-├── .env.example               # 環境変数テンプレート
-├── .env.local                 # ローカル環境変数（.gitignore）
-├── package.json
-└── tsconfig.json
-```
-
----
-
-## 今後の検討項目
-
-- [ ] データベーススキーマ設計（詳細版）
-- [ ] API エンドポイント仕様書
-- [ ] UI/UX のモックアップ作成
-- [ ] キャッシング戦略（Redis など）
-- [ ] CDN 活用
-- [ ] 監視・アラート（Sentry など）
-- [ ] バックアップ戦略
+- [ ] Supabase Realtime 購読
+- [ ] 完了アイテム自動削除処理
+- [ ] エラーログ・モニタリング
+- [ ] レート制限
 
 ---
 

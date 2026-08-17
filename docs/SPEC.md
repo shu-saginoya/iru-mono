@@ -42,7 +42,7 @@ IRU-MONO
 ### 2.1 ユーザー
 
 - ユーザーは個人でアカウントを登録できる
-- ユーザー名とパスワードで認証する
+- Google アカウントで認証する
 - ユーザーは複数のリストを作成・利用できる
 - ユーザーとリストは独立したエンティティとする
 
@@ -142,9 +142,9 @@ IRU-MONO
 
 ### 4.3 認証方式
 
-- JWT を使用する
-- 有効期限は 7 日間を基本とする
-- httpOnly Cookie を基本の保存先とする
+- 認証は Supabase Auth の Google OAuth に委譲する
+- アプリケーションは Google のパスワードを扱わない
+- セッション管理は Supabase Auth と Supabase SSR に任せる
 
 ---
 
@@ -164,7 +164,7 @@ IRU-MONO
 ### 5.3 セキュリティ
 
 - HTTPS を前提とする
-- パスワードはハッシュ化して保存する
+- Google の認証情報やパスワードをアプリ DB に保存しない
 - 認証済みユーザーのみ API を利用できる
 - ユーザーが所属していないリストのデータを参照・更新できないようにする
 
@@ -193,8 +193,8 @@ IRU-MONO
 #### User
 
 - id
-- username
-- passwordHash
+- displayName
+- avatarUrl
 - createdAt
 - updatedAt
 
@@ -251,8 +251,7 @@ IRU-MONO
 
 ### 7.1 認証系
 
-- POST /auth/signup
-- POST /auth/login
+- GET /auth/callback
 - POST /auth/logout
 - GET /auth/me
 
@@ -293,7 +292,7 @@ IRU-MONO
 
 ### フェーズ1: 認証とリスト
 
-- ユーザー登録・ログイン
+- Google OAuth によるログイン・ログアウト
 - リスト作成・一覧
 - リストへのユーザー参加
 - リスト単位のアクセス制御

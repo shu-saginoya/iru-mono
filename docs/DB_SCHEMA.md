@@ -1,550 +1,297 @@
-# データベーススキーマ設計（修正版）
+# データベーススキーマ設計（Supabase 版）
 
 ## 1. 概要
 
-IRU-MONO のデータベーススキーマ設計です。
-PostgreSQL + Prisma ORM を前提とし、複数ユーザーで共有する買い物リストを扱う設計に整理しています。
+Supabase PostgreSQL + Supabase Auth を前提としたデータベース設計です。
+ユーザーとリストを独立した概念として扱い、リストのメンバーがタグとアイテムを共有します。
 
 本設計では以下を前提とします。
 
-- ユーザーは個人で登録し、リストとは独立して管理する
-- ユーザーがリストを作成し、作成者は自動的にメンバーになる
+- 認証は Supabase Auth の Google OAuth に委譲する
+- アプリ側の `users.id` は Supabase Auth のユーザー ID と対応させる
+- パスワードや Google の認証情報はアプリ DB に保存しない
+- ユーザーは複数のリストを作成・利用できる
 - 1 つのリストには複数のユーザーが所属できる
-- 1 人のユーザーは複数のリストを作成・利用できる
-- ユーザーとリストの所属関係は `ListMember` で管理する
-- リストごとにタグとアイテムが共有される
-- タグ名は同じリスト内で一意
-- アイテムとタグの関係は多対多で管理する
-- 完了済みアイテムは 30 日経過後に自動削除される
-
-> 補足: `Tag` と `Item` はユーザーではなく `List` に所属し、アクセス時は `ListMember` による所属確認を行う
+- 所属関係は `list_members` で管理する
+- タグとアイテムはリストに所属する
+- タグ名は同じリスト内で一意とする
+- 完了済みアイテムは 30 日経過後に自動削除する
 
 ---
 
 ## 2. ER 図
 
 ```text
-┌───────────────┐
-│    List        │
-├───────────────┤
-│ id (PK)        │
-│ name           │
-│ createdById (FK)│
-│ createdAt      │
-│ updatedAt      │
-└───────┬───────┘
+┌──────────────────┐
+│      users       │  Supabase Auth のプロフィール
+├──────────────────┤
+│ id (PK/FK)       │  auth.users.id
+│ displayName      │
+│ avatarUrl        │
+│ createdAt        │
+│ updatedAt        │
+└────────┬─────────┘
+         │ 1:N createdBy
+         │
+┌────────▼─────────┐       1:N       ┌──────────────────┐
+│      lists       │─────────────────│   list_members   │
+├──────────────────┤                 ├──────────────────┤
+│ id (PK)          │                 │ id (PK)          │
+│ name             │                 │ listId (FK)      │
+│ createdById (FK) │                 │ userId (FK)      │
+│ createdAt        │                 │ joinedAt         │
+│ updatedAt        │                 └──────────────────┘
+└───────┬──────────┘
         │ 1:N
-        │
-┌───────▼───────┐
-│   ListMember   │
-├───────────────┤
-│ id (PK)        │
-│ listId (FK)    │
-│ userId (FK)    │
-│ joinedAt       │
-└───────┬───────┘
-        │
-        │ N:1
-        │
-┌───────▼───────┐
-│     User      │
-├───────────────┤
-│ id (PK)        │
-│ username       │
-│ passwordHash    │
-│ createdAt      │
-│ updatedAt      │
-└───────┬───────┘
-        │ 1:N
-        │
-┌───────▼───────┐
-│     Tag        │
-├───────────────┤
-│ id (PK)        │
-│ name           │
-│ listId (FK)    │
-│ createdAt      │
-│ updatedAt      │
-└───────┬───────┘
-        │ M:N
-        │
-┌───────▼───────┐
-│    ItemTag     │
-├───────────────┤
-│ id (PK)        │
-│ itemId (FK)    │
-│ tagId (FK)     │
-│ createdAt      │
-└───────┬───────┘
-        │
-        │ 1:N
-        │
-┌───────▼───────┐
-│     Item       │
-├───────────────┤
-│ id (PK)        │
-│ title          │
-│ quantity       │
-│ isCompleted    │
-│ listId (FK)    │
-│ completedAt    │
-│ createdAt      │
-│ updatedAt      │
-└───────────────┘
+        ├──────────────────────┐
+        │                      │
+┌───────▼──────────┐    ┌──────▼───────────┐
+│       tags       │    │      items       │
+├──────────────────┤    ├──────────────────┤
+│ id (PK)          │    │ id (PK)          │
+│ listId (FK)      │    │ listId (FK)      │
+│ name             │    │ title            │
+│ createdAt        │    │ quantity         │
+│ updatedAt        │    │ isCompleted      │
+└────────┬─────────┘    │ completedAt      │
+         │              │ createdAt        │
+         │ M:N          │ updatedAt        │
+         └──────┐       └────────┬─────────┘
+                │                │
+           ┌────▼────────────────▼────┐
+           │        item_tags         │
+           ├──────────────────────────┤
+           │ itemId (FK)              │
+           │ tagId (FK)               │
+           │ createdAt                │
+           └──────────────────────────┘
 ```
 
 ---
 
 ## 3. テーブル定義
 
-### 3.1 List（リスト）
+### 3.1 `public.users`
 
-買い物リストの共有単位を管理するテーブル。
+Supabase Auth のユーザーに対応するアプリ側プロフィール。`id` は `auth.users.id` と同じ値を使用します。
 
-| カラム名    | データ型 | 制約                    | 説明                             |
-| ----------- | -------- | ----------------------- | -------------------------------- |
-| id          | String   | PRIMARY KEY             | リストID                         |
-| name        | String   | NOT NULL                | リスト名（例: 「日常の買い物」） |
-| createdById | String   | FOREIGN KEY, NOT NULL   | 作成者ユーザーID                 |
-| createdAt   | DateTime | NOT NULL, DEFAULT now() | 作成日時                         |
-| updatedAt   | DateTime | NOT NULL, DEFAULT now() | 更新日時                         |
+| カラム         | 型          | 制約                     | 説明                        |
+| -------------- | ----------- | ------------------------ | --------------------------- |
+| `id`           | uuid        | PRIMARY KEY, FOREIGN KEY | `auth.users.id`             |
+| `display_name` | text        | NULLABLE                 | Google アカウントの表示名   |
+| `avatar_url`   | text        | NULLABLE                 | Google アカウントの画像 URL |
+| `created_at`   | timestamptz | NOT NULL, DEFAULT now()  | 作成日時                    |
+| `updated_at`   | timestamptz | NOT NULL, DEFAULT now()  | 更新日時                    |
 
-**Prisma スキーマ**:
+### 3.2 `public.lists`
 
-```prisma
-model List {
-  id          String       @id @default(cuid())
-  name        String
-  createdById String
-  createdBy   User         @relation("ListCreator", fields: [createdById], references: [id])
-  members     ListMember[]
-  tags        Tag[]
-  items       Item[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+ユーザーが作成する共有リスト。
 
-  @@index([createdById])
-}
-```
+| カラム       | 型          | 制約                                   | 説明                |
+| ------------ | ----------- | -------------------------------------- | ------------------- |
+| `id`         | uuid        | PRIMARY KEY, DEFAULT gen_random_uuid() | リスト ID           |
+| `name`       | text        | NOT NULL                               | リスト名            |
+| `created_by` | uuid        | FOREIGN KEY, NOT NULL                  | 作成者のユーザー ID |
+| `created_at` | timestamptz | NOT NULL, DEFAULT now()                | 作成日時            |
+| `updated_at` | timestamptz | NOT NULL, DEFAULT now()                | 更新日時            |
 
-**設計メモ**:
+### 3.3 `public.list_members`
 
-- リスト作成時に、作成者を `ListMember` として登録する
-- リストの共有範囲は `ListMember` に登録されたユーザーで決まる
+ユーザーとリストの所属関係。作成者もこのテーブルに登録します。
 
----
+| カラム      | 型          | 制約                                   | 説明        |
+| ----------- | ----------- | -------------------------------------- | ----------- |
+| `id`        | uuid        | PRIMARY KEY, DEFAULT gen_random_uuid() | 所属 ID     |
+| `list_id`   | uuid        | FOREIGN KEY, NOT NULL                  | リスト ID   |
+| `user_id`   | uuid        | FOREIGN KEY, NOT NULL                  | ユーザー ID |
+| `joined_at` | timestamptz | NOT NULL, DEFAULT now()                | 参加日時    |
 
-### 3.2 ListMember（リストメンバー）
+制約: `UNIQUE (list_id, user_id)`
 
-ユーザーとリストの所属関係を管理する中間テーブル。
+### 3.4 `public.tags`
 
-| カラム名 | データ型 | 制約                    | 説明       |
-| -------- | -------- | ----------------------- | ---------- |
-| id       | String   | PRIMARY KEY             | 所属関係ID |
-| listId   | String   | FOREIGN KEY, NOT NULL   | リストID   |
-| userId   | String   | FOREIGN KEY, NOT NULL   | ユーザーID |
-| joinedAt | DateTime | NOT NULL, DEFAULT now() | 参加日時   |
+リスト単位で管理するタグ。
 
-**Prisma スキーマ**:
+| カラム       | 型          | 制約                                   | 説明      |
+| ------------ | ----------- | -------------------------------------- | --------- |
+| `id`         | uuid        | PRIMARY KEY, DEFAULT gen_random_uuid() | タグ ID   |
+| `list_id`    | uuid        | FOREIGN KEY, NOT NULL                  | リスト ID |
+| `name`       | text        | NOT NULL                               | タグ名    |
+| `created_at` | timestamptz | NOT NULL, DEFAULT now()                | 作成日時  |
+| `updated_at` | timestamptz | NOT NULL, DEFAULT now()                | 更新日時  |
 
-```prisma
-model ListMember {
-  id       String   @id @default(cuid())
-  listId   String
-  userId   String
-  list     List     @relation(fields: [listId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  joinedAt DateTime @default(now())
+制約: `UNIQUE (list_id, name)`
 
-  @@unique([listId, userId])
-  @@index([listId])
-  @@index([userId])
-}
-```
+### 3.5 `public.items`
 
-**設計意図**:
+リスト単位で管理する買い物アイテム。
 
-- 1 つのリストに複数ユーザーが参加できるようにする
-- 1 人のユーザーが複数リストを作成・利用できるようにする
-- リストごとの共有範囲を明確にする
+| カラム         | 型          | 制約                                   | 説明        |
+| -------------- | ----------- | -------------------------------------- | ----------- |
+| `id`           | uuid        | PRIMARY KEY, DEFAULT gen_random_uuid() | アイテム ID |
+| `list_id`      | uuid        | FOREIGN KEY, NOT NULL                  | リスト ID   |
+| `title`        | text        | NOT NULL                               | 商品名      |
+| `quantity`     | integer     | NOT NULL, DEFAULT 1                    | 数量        |
+| `is_completed` | boolean     | NOT NULL, DEFAULT false                | 完了状態    |
+| `completed_at` | timestamptz | NULLABLE                               | 完了日時    |
+| `created_at`   | timestamptz | NOT NULL, DEFAULT now()                | 作成日時    |
+| `updated_at`   | timestamptz | NOT NULL, DEFAULT now()                | 更新日時    |
 
-### 3.3 User（ユーザー）
+### 3.6 `public.item_tags`
 
-ログインユーザーを管理するテーブル。
+アイテムとタグの多対多関係。
 
-| カラム名     | データ型 | 制約                    | 説明                 |
-| ------------ | -------- | ----------------------- | -------------------- |
-| id           | String   | PRIMARY KEY             | ユーザーID           |
-| username     | String   | UNIQUE, NOT NULL        | ユーザー名           |
-| passwordHash | String   | NOT NULL                | パスワードのハッシュ |
-| createdAt    | DateTime | NOT NULL, DEFAULT now() | 作成日時             |
-| updatedAt    | DateTime | NOT NULL, DEFAULT now() | 更新日時             |
+| カラム       | 型          | 制約                    | 説明        |
+| ------------ | ----------- | ----------------------- | ----------- |
+| `item_id`    | uuid        | FOREIGN KEY, NOT NULL   | アイテム ID |
+| `tag_id`     | uuid        | FOREIGN KEY, NOT NULL   | タグ ID     |
+| `created_at` | timestamptz | NOT NULL, DEFAULT now() | 作成日時    |
 
-**Prisma スキーマ**:
-
-```prisma
-model User {
-  id           String       @id @default(cuid())
-  username     String       @unique
-  passwordHash String
-  createdLists List[]       @relation("ListCreator")
-  memberships  ListMember[]
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-
-  @@index([username])
-}
-```
-
-**設計意図**:
-
-- 将来的な複数リスト所属を見据えて、`User` 自体に `listId` を持たせない
-- 所属関係は `ListMember` で管理する
+制約: `PRIMARY KEY (item_id, tag_id)`
 
 ---
 
-### 3.4 Tag（タグ）
-
-買い物シーンの分類を行うタグ。
-
-| カラム名  | データ型  | 制約                    | 説明                          |
-| --------- | --------- | ----------------------- | ----------------------------- |
-| id        | String    | PRIMARY KEY             | タグID                        |
-| name      | String    | NOT NULL                | タグ名（例: スーパー）        |
-| listId    | String    | FOREIGN KEY, NOT NULL   | 所属リストID                  |
-| list      | List      | relation                | 所属リスト                    |
-| items     | ItemTag[] |                         | 付き与された ItemTag レコード |
-| createdAt | DateTime  | NOT NULL, DEFAULT now() | 作成日時                      |
-| updatedAt | DateTime  | NOT NULL, DEFAULT now() | 更新日時                      |
-
-**Prisma スキーマ**:
-
-```prisma
-model Tag {
-  id        String   @id @default(cuid())
-  name      String
-  listId    String
-  list      List     @relation(fields: [listId], references: [id], onDelete: Cascade)
-  items     ItemTag[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([listId, name])
-  @@index([listId])
-}
-```
-
-**制約**:
-
-- `(listId, name)` はユニーク
-- 同じリスト内でタグ名の重複を禁止
-
----
-
-### 3.5 Item（アイテム）
-
-買い物リストの対象となるアイテム。
-
-| カラム名    | データ型  | 制約                    | 説明         |
-| ----------- | --------- | ----------------------- | ------------ |
-| id          | String    | PRIMARY KEY             | アイテムID   |
-| title       | String    | NOT NULL                | 商品名       |
-| quantity    | Int       | NOT NULL, DEFAULT 1     | 数量         |
-| isCompleted | Boolean   | NOT NULL, DEFAULT false | 完了状態     |
-| listId      | String    | FOREIGN KEY, NOT NULL   | 所属リストID |
-| list        | List      | relation                | 所属リスト   |
-| tags        | ItemTag[] |                         | 関連するタグ |
-| completedAt | DateTime? | NULLABLE                | 完了日時     |
-| createdAt   | DateTime  | NOT NULL, DEFAULT now() | 作成日時     |
-| updatedAt   | DateTime  | NOT NULL, DEFAULT now() | 更新日時     |
-
-**Prisma スキーマ**:
-
-```prisma
-model Item {
-  id          String    @id @default(cuid())
-  title       String
-  quantity    Int       @default(1)
-  isCompleted Boolean   @default(false)
-  listId      String
-  list        List      @relation(fields: [listId], references: [id], onDelete: Cascade)
-  tags        ItemTag[]
-  completedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  @@index([listId])
-  @@index([isCompleted])
-  @@index([completedAt])
-}
-```
-
-**設計意図**:
-
-- `completedAt` は完了した時刻を保持する
-- 30 日経過した完了アイテムを自動削除するため、索引を保持する
-
----
-
-### 3.6 ItemTag（アイテムとタグの中間テーブル）
-
-1 つのアイテムに複数のタグを付与するための中間テーブル。
-
-| カラム名  | データ型 | 制約                    | 説明           |
-| --------- | -------- | ----------------------- | -------------- |
-| id        | String   | PRIMARY KEY             | 関連レコードID |
-| itemId    | String   | FOREIGN KEY, NOT NULL   | アイテムID     |
-| tagId     | String   | FOREIGN KEY, NOT NULL   | タグID         |
-| item      | Item     | relation                | 対象アイテム   |
-| tag       | Tag      | relation                | 対象タグ       |
-| createdAt | DateTime | NOT NULL, DEFAULT now() | 作成日時       |
-
-**Prisma スキーマ**:
-
-```prisma
-model ItemTag {
-  id        String   @id @default(cuid())
-  itemId    String
-  tagId     String
-  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-
-  @@unique([itemId, tagId])
-  @@index([itemId])
-  @@index([tagId])
-}
-```
-
-**制約**:
-
-- 同一アイテムに同一タグを重複登録しない
-- タグまたはアイテムが削除されると、この中間レコードも削除する
-
----
-
-## 4. Prisma スキーマ（完全版）
-
-```prisma
-// prisma/schema.prisma
-
-generator client {
-  provider = "prisma-client-js"
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-model List {
-  id          String       @id @default(cuid())
-  name        String
-  createdById String
-  createdBy   User         @relation("ListCreator", fields: [createdById], references: [id])
-  members     ListMember[]
-  tags        Tag[]
-  items       Item[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-
-  @@index([createdById])
-}
-
-model ListMember {
-  id       String   @id @default(cuid())
-  listId   String
-  userId   String
-  list     List     @relation(fields: [listId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  joinedAt DateTime @default(now())
-
-  @@unique([listId, userId])
-  @@index([listId])
-  @@index([userId])
-}
-
-model User {
-  id           String       @id @default(cuid())
-  username     String       @unique
-  passwordHash String
-  createdLists List[]       @relation("ListCreator")
-  memberships  ListMember[]
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-
-  @@index([username])
-}
-
-model Tag {
-  id        String   @id @default(cuid())
-  name      String
-  listId    String
-  list      List     @relation(fields: [listId], references: [id], onDelete: Cascade)
-  items     ItemTag[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([listId, name])
-  @@index([listId])
-}
-
-model Item {
-  id          String    @id @default(cuid())
-  title       String
-  quantity    Int       @default(1)
-  isCompleted Boolean   @default(false)
-  listId      String
-  list        List      @relation(fields: [listId], references: [id], onDelete: Cascade)
-  tags        ItemTag[]
-  completedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  @@index([listId])
-  @@index([isCompleted])
-  @@index([completedAt])
-}
-
-model ItemTag {
-  id        String   @id @default(cuid())
-  itemId    String
-  tagId     String
-  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-
-  @@unique([itemId, tagId])
-  @@index([itemId])
-  @@index([tagId])
-}
-```
-
----
-
-## 5. スキーマの特徴
-
-### 5.1 リスト単位でのデータ分離
-
-- `ListMember` でユーザーとリストの所属関係を管理する
-- `Tag` と `Item` は `listId` を持ち、同じリストのデータのみ扱う
-- これにより、所属していないリストのデータへのアクセスを防止できる
-- 同じユーザーが複数リストを利用しても、データをリスト単位で分離できる
-
-### 5.2 カスケード削除
-
-- リストが削除された場合、その配下のメンバー・タグ・アイテムが削除される
-- タグが削除された場合、関連する `ItemTag` が自動削除される
-- アイテムが削除された場合、関連する `ItemTag` が自動削除される
-
-### 5.3 多対多関係
-
-- `ItemTag` 中間テーブルで実装
-- 1 つのアイテムに複数のタグを付与可能
-- 1 つのタグが複数のアイテムに付与可能
-
-### 5.4 自動削除バッチ
-
-完了済みアイテムの削除条件は次の通りです。
+## 4. Supabase SQL 定義
 
 ```sql
-DELETE FROM "Item"
-WHERE "isCompleted" = true
-  AND "completedAt" < NOW() - INTERVAL '30 days';
+create table public.users (
+  id uuid primary key references auth.users(id) on delete cascade,
+  display_name text,
+  avatar_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.lists (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (char_length(name) between 1 and 100),
+  created_by uuid not null references public.users(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.list_members (
+  id uuid primary key default gen_random_uuid(),
+  list_id uuid not null references public.lists(id) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  joined_at timestamptz not null default now(),
+  unique (list_id, user_id)
+);
+
+create table public.tags (
+  id uuid primary key default gen_random_uuid(),
+  list_id uuid not null references public.lists(id) on delete cascade,
+  name text not null check (char_length(name) between 1 and 50),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (list_id, name)
+);
+
+create table public.items (
+  id uuid primary key default gen_random_uuid(),
+  list_id uuid not null references public.lists(id) on delete cascade,
+  title text not null check (char_length(title) between 1 and 255),
+  quantity integer not null default 1 check (quantity between 1 and 999),
+  is_completed boolean not null default false,
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check ((is_completed = false and completed_at is null)
+      or (is_completed = true and completed_at is not null))
+);
+
+create table public.item_tags (
+  item_id uuid not null references public.items(id) on delete cascade,
+  tag_id uuid not null references public.tags(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (item_id, tag_id)
+);
+
+create index list_members_user_id_idx on public.list_members(user_id);
+create index tags_list_id_idx on public.tags(list_id);
+create index items_list_id_idx on public.items(list_id);
+create index items_completed_at_idx on public.items(completed_at);
 ```
 
-Prisma では以下のように削除できます。
-
-```ts
-await prisma.item.deleteMany({
-  where: {
-    isCompleted: true,
-    completedAt: {
-      lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
-    },
-  },
-});
-```
+`item_tags` への登録時は、アプリケーションまたは追加の DB 制約で `item_id` と `tag_id` が同じ `list_id` に属することを確認します。
 
 ---
 
-## 6. インデックス設計
+## 5. Row Level Security
 
-| テーブル   | カラム      | 用途                     |
-| ---------- | ----------- | ------------------------ |
-| List       | id          | 主要キー                 |
-| ListMember | listId      | リストのメンバー取得     |
-| ListMember | userId      | ユーザーの所属リスト取得 |
-| User       | username    | ログイン検索             |
-| Tag        | listId      | リストのタグ一覧取得     |
-| Item       | listId      | リストのアイテム一覧取得 |
-| Item       | isCompleted | 完了/未完了の選別        |
-| Item       | completedAt | 自動削除バッチ           |
-| ItemTag    | itemId      | アイテムからタグ取得     |
-| ItemTag    | tagId       | タグからアイテム取得     |
+Supabase の Row Level Security を有効にし、所属リストのデータだけへアクセスできるようにします。
+
+```sql
+alter table public.users enable row level security;
+alter table public.lists enable row level security;
+alter table public.list_members enable row level security;
+alter table public.tags enable row level security;
+alter table public.items enable row level security;
+alter table public.item_tags enable row level security;
+```
+
+代表的な所属判定:
+
+```sql
+exists (
+  select 1
+  from public.list_members
+  where list_members.list_id = <対象リスト ID>
+    and list_members.user_id = auth.uid()
+)
+```
+
+実装時は、各テーブルの SELECT・INSERT・UPDATE・DELETE ポリシーでこの判定を使用します。サービスロールキーは RLS を迂回するため、サーバー専用とし、ブラウザへ渡しません。
 
 ---
 
-## 7. 初期化スクリプト
+## 6. リスト作成時の処理
 
-```bash
-pnpm prisma migrate dev --name init
-pnpm prisma generate
+リスト作成は次の処理を同一トランザクションで行います。
+
+1. `lists` に作成者と名前を登録する
+2. `list_members` に作成者を登録する
+3. 作成したリストを返す
+
+作成者の `created_by` と `list_members.user_id` は同じ Supabase Auth ユーザー ID です。
+
+---
+
+## 7. 自動削除バッチ
+
+完了から 30 日経過したアイテムを削除します。Supabase の Scheduled Edge Function または pg_cron を利用します。
+
+```sql
+delete from public.items
+where is_completed = true
+  and completed_at < now() - interval '30 days';
 ```
 
-本番環境では:
-
-```bash
-pnpm prisma migrate deploy
-```
+`items` の削除により、外部キーの cascade で `item_tags` も削除されます。
 
 ---
 
 ## 8. サンプルデータ
 
-### List テーブル
+### User
 
-| id       | name         | createdById |
-| -------- | ------------ | ----------- |
-| list_001 | 日常の買い物 | usr_001     |
+| id                | display_name | avatar_url                       |
+| ----------------- | ------------ | -------------------------------- |
+| `google-user-001` | Taro         | `https://example.com/taro.png`   |
+| `google-user-002` | Hanako       | `https://example.com/hanako.png` |
 
-### ListMember テーブル
+### List
 
-| id     | listId   | userId  |
-| ------ | -------- | ------- |
-| lm_001 | list_001 | usr_001 |
-| lm_002 | list_001 | usr_002 |
+| id         | name         | created_by        |
+| ---------- | ------------ | ----------------- |
+| `list-001` | 日常の買い物 | `google-user-001` |
 
-### User テーブル
+### ListMember
 
-| id      | username | passwordHash |
-| ------- | -------- | ------------ |
-| usr_001 | taro     | $2b$10$...   |
-| usr_002 | hanako   | $2b$10$...   |
-
-### Tag テーブル
-
-| id      | name           | listId   |
-| ------- | -------------- | -------- |
-| tag_001 | スーパー       | list_001 |
-| tag_002 | ドラッグストア | list_001 |
-| tag_003 | コストコ       | list_001 |
-
-### Item テーブル
-
-| id      | title  | quantity | isCompleted | listId   | completedAt          |
-| ------- | ------ | -------- | ----------- | -------- | -------------------- |
-| itm_001 | 牛乳   | 1        | false       | list_001 | NULL                 |
-| itm_002 | パン   | 2        | true        | list_001 | 2026-08-17T10:00:00Z |
-| itm_003 | 風邪薬 | 1        | false       | list_001 | NULL                 |
-
-### ItemTag テーブル
-
-| id       | itemId  | tagId   |
-| -------- | ------- | ------- |
-| iTag_001 | itm_001 | tag_001 |
-| iTag_002 | itm_001 | tag_002 |
-| iTag_003 | itm_003 | tag_002 |
+| list_id    | user_id           |
+| ---------- | ----------------- |
+| `list-001` | `google-user-001` |
+| `list-001` | `google-user-002` |
 
 ---
 
@@ -553,10 +300,7 @@ pnpm prisma migrate deploy
 - [ ] リスト参加方式（招待コード・招待リンク・ユーザー指定）
 - [ ] リスト作成者と一般メンバーの役割管理
 - [ ] リスト作成者の退会・削除フロー
-- [ ] 通知設定テーブル
-- [ ] 監査ログテーブル
-- [ ] キャッシング戦略
-
----
+- [ ] RLS ポリシーの全テーブル分の具体化
+- [ ] 完了アイテム削除の Scheduled Edge Function または pg_cron の選定
 
 最終更新: 2026年8月17日
