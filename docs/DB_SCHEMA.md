@@ -29,6 +29,7 @@ PostgreSQL + Prisma ORM を前提とし、複数ユーザーで共有する買�
 ├───────────────┤
 │ id (PK)        │
 │ name           │
+│ createdById (FK)│
 │ createdAt      │
 │ updatedAt      │
 └───────┬───────┘
@@ -50,7 +51,7 @@ PostgreSQL + Prisma ORM を前提とし、複数ユーザーで共有する買�
 ├───────────────┤
 │ id (PK)        │
 │ username       │
-│ password       │
+│ passwordHash    │
 │ createdAt      │
 │ updatedAt      │
 └───────┬───────┘
@@ -516,10 +517,10 @@ pnpm prisma migrate deploy
 
 ### User テーブル
 
-| id      | username | password   |
-| ------- | -------- | ---------- |
-| usr_001 | taro     | $2b$10$... |
-| usr_002 | hanako   | $2b$10$... |
+| id      | username | passwordHash |
+| ------- | -------- | ------------ |
+| usr_001 | taro     | $2b$10$...   |
+| usr_002 | hanako   | $2b$10$...   |
 
 ### Tag テーブル
 

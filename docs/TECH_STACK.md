@@ -85,11 +85,11 @@ IRU-MONO の技術スタックおよび構成についてのドキュメント�
 ## 認証フロー
 
 1. ユーザーがログイン画面でユーザー名/パスワードを入力
-2. Next.js API Routes で bcrypt でパスワードを検証
-3. 検証成功時、JWT トークンを発行
-4. クライアントが JWT を localStorage / Cookie に保存
-5. 以降、API リクエストに Authorization ヘッダーで JWT を送付
-6. Next.js Middleware で JWT を検証してリクエスト処理
+2. Next.js API Routes で bcrypt によりパスワードを検証
+3. 検証成功時、JWT を発行して httpOnly Cookie に設定
+4. ブラウザが以降の API リクエストへ Cookie を自動送信
+5. Next.js Middleware または API 共通処理で Cookie の JWT を検証
+6. ローカル開発時のみ、必要に応じて `Authorization: Bearer <token>` を許容
 
 ---
 
@@ -102,7 +102,7 @@ IRU-MONO の技術スタックおよび構成についてのドキュメント�
                       │
                   DB 更新（Prisma）
                       │
-              WebSocket で全クライアントに通知
+              WebSocket で同じリストのメンバーに通知
                       │
             ┌─────────┴─────────┐
             │                   │
