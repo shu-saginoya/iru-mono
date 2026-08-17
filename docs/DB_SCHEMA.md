@@ -109,6 +109,7 @@ PostgreSQL + Prisma ORM を前提とし、複数ユーザーで共有する買�
 | updatedAt   | DateTime | NOT NULL, DEFAULT now() | 更新日時                         |
 
 **Prisma スキーマ**:
+
 ```prisma
 model List {
   id          String       @id @default(cuid())
@@ -126,6 +127,7 @@ model List {
 ```
 
 **設計メモ**:
+
 - リスト作成時に、作成者を `ListMember` として登録する
 - リストの共有範囲は `ListMember` に登録されたユーザーで決まる
 
@@ -143,6 +145,7 @@ model List {
 | joinedAt | DateTime | NOT NULL, DEFAULT now() | 参加日時   |
 
 **Prisma スキーマ**:
+
 ```prisma
 model ListMember {
   id       String   @id @default(cuid())
@@ -159,6 +162,7 @@ model ListMember {
 ```
 
 **設計意図**:
+
 - 1 つのリストに複数ユーザーが参加できるようにする
 - 1 人のユーザーが複数リストを作成・利用できるようにする
 - リストごとの共有範囲を明確にする
@@ -176,6 +180,7 @@ model ListMember {
 | updatedAt    | DateTime | NOT NULL, DEFAULT now() | 更新日時             |
 
 **Prisma スキーマ**:
+
 ```prisma
 model User {
   id           String       @id @default(cuid())
@@ -191,6 +196,7 @@ model User {
 ```
 
 **設計意図**:
+
 - 将来的な複数リスト所属を見据えて、`User` 自体に `listId` を持たせない
 - 所属関係は `ListMember` で管理する
 
@@ -211,6 +217,7 @@ model User {
 | updatedAt | DateTime  | NOT NULL, DEFAULT now() | 更新日時                      |
 
 **Prisma スキーマ**:
+
 ```prisma
 model Tag {
   id        String   @id @default(cuid())
@@ -227,6 +234,7 @@ model Tag {
 ```
 
 **制約**:
+
 - `(listId, name)` はユニーク
 - 同じリスト内でタグ名の重複を禁止
 
@@ -250,6 +258,7 @@ model Tag {
 | updatedAt   | DateTime  | NOT NULL, DEFAULT now() | 更新日時     |
 
 **Prisma スキーマ**:
+
 ```prisma
 model Item {
   id          String    @id @default(cuid())
@@ -270,6 +279,7 @@ model Item {
 ```
 
 **設計意図**:
+
 - `completedAt` は完了した時刻を保持する
 - 30 日経過した完了アイテムを自動削除するため、索引を保持する
 
@@ -289,6 +299,7 @@ model Item {
 | createdAt | DateTime | NOT NULL, DEFAULT now() | 作成日時       |
 
 **Prisma スキーマ**:
+
 ```prisma
 model ItemTag {
   id        String   @id @default(cuid())
@@ -305,6 +316,7 @@ model ItemTag {
 ```
 
 **制約**:
+
 - 同一アイテムに同一タグを重複登録しない
 - タグまたはアイテムが削除されると、この中間レコードも削除する
 
