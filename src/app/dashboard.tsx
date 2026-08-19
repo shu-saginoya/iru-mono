@@ -1,7 +1,7 @@
 "use client";
 
 import { Edit3, Settings, Trash2, UserMinus, Users, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type ShoppingList = { id: string; name: string };
 type Item = {
@@ -65,7 +65,7 @@ export function Dashboard({
   const itemTitleInput = useRef<HTMLInputElement>(null);
   const lastListKey = `iru-mono:last-list:${userId}`;
 
-  async function loadLists() {
+  const loadLists = useCallback(async () => {
     const response = await fetch("/lists");
     if (!response.ok) throw new Error("リストを取得できませんでした");
     const data = (await response.json()) as { lists: ShoppingList[] };
@@ -75,19 +75,22 @@ export function Dashboard({
       : data.lists[0]?.id || "";
     setLists(data.lists);
     setSelectedListId((current) => current || initialListId);
-  }
+  }, [lastListKey]);
 
-  async function loadItems(listId: string) {
-    if (!listId) return setItems([]);
-    const status = showCompleted ? "completed" : "pending";
-    const response = await fetch(`/lists/${listId}/items?status=${status}`);
-    if (!response.ok)
-      throw new Error(
-        await getRequestError(response, "アイテムを取得できませんでした"),
-      );
-    const data = (await response.json()) as { items: Item[] };
-    setItems(data.items);
-  }
+  const loadItems = useCallback(
+    async (listId: string) => {
+      if (!listId) return setItems([]);
+      const status = showCompleted ? "completed" : "pending";
+      const response = await fetch(`/lists/${listId}/items?status=${status}`);
+      if (!response.ok)
+        throw new Error(
+          await getRequestError(response, "アイテムを取得できませんでした"),
+        );
+      const data = (await response.json()) as { items: Item[] };
+      setItems(data.items);
+    },
+    [showCompleted],
+  );
 
   async function loadListDetails(listId: string) {
     const response = await fetch(`/lists/${listId}`);
@@ -105,11 +108,40 @@ export function Dashboard({
   }
 
   useEffect(() => {
-    loadLists().catch((cause: Error) => setError(cause.message));
-  }, []);
+    let active = true;
+
+    void (async () => {
+      try {
+        await loadLists();
+      } catch (cause) {
+        if (active && cause instanceof Error) {
+          setError(cause.message);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [loadLists]);
+
   useEffect(() => {
-    loadItems(selectedListId).catch((cause: Error) => setError(cause.message));
-  }, [selectedListId, showCompleted]);
+    let active = true;
+
+    void (async () => {
+      try {
+        await loadItems(selectedListId);
+      } catch (cause) {
+        if (active && cause instanceof Error) {
+          setError(cause.message);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [loadItems, selectedListId]);
   useEffect(() => {
     if (selectedListId) localStorage.setItem(lastListKey, selectedListId);
   }, [selectedListId, lastListKey]);
