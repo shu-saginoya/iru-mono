@@ -26,5 +26,8 @@
     "tailwindcss": "^4",
     "typescript": "^5"
   },
-  "packageManager": "pnpm@10.27.0"
+  "packageManager": "pnpm@10.27.0",
+  "volta": {
+    "node": "24.13.0"
+  }
 }
