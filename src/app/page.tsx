@@ -19,5 +19,5 @@ export default async function Home() {
     );
   }
 
-  return <Dashboard email={user.email ?? ""} />;
+  return <Dashboard email={user.email ?? ""} userId={user.id} />;
 }
