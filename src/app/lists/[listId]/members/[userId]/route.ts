@@ -17,6 +17,11 @@ export async function DELETE(_request: Request, { params }: Context) {
       { error: "Owner access required", code: "FORBIDDEN" },
       { status: 403 },
     );
+  if (userId === access.list.created_by)
+    return Response.json(
+      { error: "The list owner cannot be removed", code: "OWNER_CANNOT_BE_REMOVED" },
+      { status: 409 },
+    );
   const { error } = await context.supabase
     .from("list_members")
     .delete()
