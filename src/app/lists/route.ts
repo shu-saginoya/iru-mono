@@ -7,16 +7,36 @@ export async function GET() {
   const context = await getAuthContext();
   if (!context) return unauthorized();
 
+  const { data: memberships, error: membershipsError } = await context.supabase
+    .from("list_members")
+    .select("list_id")
+    .eq("user_id", context.user.id);
+
+  if (membershipsError)
+    return Response.json(
+      { error: membershipsError.message, code: "LIST_MEMBERS_READ_FAILED" },
+      { status: 500 },
+    );
+
+  const listIds = (memberships ?? []).map((membership) => membership.list_id);
+
+  if (listIds.length === 0) {
+    return Response.json({ lists: [] });
+  }
+
   const { data, error } = await context.supabase
     .from("lists")
     .select("*")
+    .in("id", listIds)
     .order("updated_at", { ascending: false });
+
   if (error)
     return Response.json(
       { error: error.message, code: "LISTS_READ_FAILED" },
       { status: 500 },
     );
-  return Response.json({ lists: data });
+
+  return Response.json({ lists: data ?? [] });
 }
 
 export async function POST(request: Request) {
