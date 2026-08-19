@@ -19,7 +19,10 @@ export async function DELETE(_request: Request, { params }: Context) {
     );
   if (userId === access.list.created_by)
     return Response.json(
-      { error: "The list owner cannot be removed", code: "OWNER_CANNOT_BE_REMOVED" },
+      {
+        error: "The list owner cannot be removed",
+        code: "OWNER_CANNOT_BE_REMOVED",
+      },
       { status: 409 },
     );
   const { error } = await context.supabase

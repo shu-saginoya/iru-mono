@@ -274,7 +274,9 @@ input:focus {
   box-shadow: 0 8px 18px rgb(186 71 41 / 30%);
   font-size: 2rem;
   line-height: 1;
-  transition: background 0.2s, transform 0.2s;
+  transition:
+    background 0.2s,
+    transform 0.2s;
 }
 .item-fab:hover {
   background: var(--accent-dark);
