@@ -1,12 +1,13 @@
 # IRU MONO
 
-共有買い物リストアプリの MVP です。Google OAuth でログインし、ユーザー間でリストとアイテムを共有できます。
+共有買い物リストアプリです。家族などで必要なものを登録して買い物の時に一覧で確認できます。
 
 ## 1. 概要
 
 IRU MONO は、複数人で買い物リストを共有するためのシンプルな Web アプリです。
 
 主な機能:
+
 - Google アカウントでログイン
 - リストの作成と一覧表示
 - リストへのメンバー追加
@@ -60,16 +61,17 @@ IRU MONO は、複数人で買い物リストを共有するためのシンプ�
 - Node.js 20 以上推奨
 - pnpm
 - Supabase アカウント
-- Vercel アカウント（デプロイ用）
 - Google Cloud Console の OAuth 設定
 
-## 6. ローカル開発
+## 6. セットアップ
 
 依存関係をインストールします。
 
 ```bash
 pnpm install
 ```
+
+`.env.example` を参考に `.env.local` を作成します（詳細は「7. 環境変数」を参照）。
 
 開発サーバーを起動します。
 
@@ -83,33 +85,44 @@ pnpm dev
 
 ## 7. 環境変数
 
-ローカル開発では `.env.local` を作成し、以下を設定します。
+### 現在使用している変数
+
+| 変数名                          | 用途                                                       |
+| ------------------------------- | ---------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`      | Supabase プロジェクトの URL                                |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase クライアント（ブラウザ・サーバー共通）の anon key |
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-SUPABASE_SERVICE_ROLE_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-`.env.example` を参考にしてください。
+### 未使用の変数（将来用）
+
+以下は `.env.example` に記載していますが、現状のコードからは参照されていません。RLS をバイパスする管理者操作など、`SUPABASE_SERVICE_ROLE_KEY` が必要な機能を実装するまでは設定不要です。誤って公開しないよう、使う予定がない場合はデプロイ先にも登録しないでください。
+
+| 変数名                      | 想定用途                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| `SUPABASE_SERVICE_ROLE_KEY` | RLS を無視するサーバー専用の管理者キー（未実装）                               |
+| `NEXT_PUBLIC_APP_URL`       | アプリの公開 URL（未参照。リダイレクト先は `window.location.origin` から生成） |
 
 ## 8. Supabase 設定
 
 ### 8.1 Supabase プロジェクト作成
 
 1. Supabase で新規プロジェクトを作成する
-2. プロジェクト URL と anon key を取得する
-3. project settings > API から URL / anon key / service role key を確認する
+2. project settings > API から URL と anon key を取得する
 
 ### 8.2 Google OAuth 設定
 
 1. Google Cloud Console で OAuth クライアント ID を作成する
-2. Authorized JavaScript origins に `http://localhost:3000` を追加する
-3. Authorized redirect URIs に以下を追加する
-   - `http://localhost:3000/auth/callback`
-   - デプロイ後は `https://<your-domain>/auth/callback`
+2. Authorized JavaScript origins にアプリの URL を追加する（例: `http://localhost:3000`、本番 URL）
+3. Authorized redirect URIs に **Supabase の callback URL** を追加する
+   - `https://<your-project>.supabase.co/auth/v1/callback`
 4. Supabase の Authentication > Providers > Google で Client ID / Secret を設定する
+5. Supabase の Authentication > URL Configuration で以下を設定する
+   - Site URL: アプリの公開 URL
+   - Redirect URLs: `<アプリの URL>/auth/callback`（ローカルと本番の両方を登録可能）
 
 ### 8.3 DB 作成
 
@@ -122,28 +135,23 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 また、RLS を有効化し、各テーブルに権限ポリシーを設定してください。
 
-## 9. デプロイ準備
+## 9. デプロイ
 
-### Vercel へのデプロイ
+Vercel でホスティングしています。GitHub リポジトリを Vercel にインポートし、Project Settings で「7. 環境変数」の内容を設定すればデプロイできます。ビルドコマンドは `pnpm build` です。
 
-1. GitHub にこのリポジトリを push する
-2. Vercel で GitHub リポジトリをインポートする
-3. Project Settings で環境変数を設定する
-4. ビルドコマンド: `pnpm build`
-5. デプロイ後に `NEXT_PUBLIC_APP_URL` を本番 URL に設定する
+Google ログイン後に意図しない URL へリダイレクトされる場合は、Supabase の Site URL / Redirect URLs と、Google Cloud Console のリダイレクト URI（Supabase の callback URL）の設定を確認してください。
 
-### 本番環境での必須変数
+## 10. コマンド
 
-```env
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-SUPABASE_SERVICE_ROLE_KEY=...
-NEXT_PUBLIC_APP_URL=https://your-project.vercel.app
+```bash
+pnpm dev     # 開発サーバー起動
+pnpm build   # 本番ビルド
+pnpm start   # 本番ビルドの起動
+pnpm lint    # ESLint
+pnpm test    # Vitest
 ```
 
-## 10. 実行確認
-
-ローカルまたは本番で以下を確認します。
+## 11. 動作確認項目
 
 - サインインができる
 - リストを作成できる
@@ -151,7 +159,7 @@ NEXT_PUBLIC_APP_URL=https://your-project.vercel.app
 - アイテムを追加・完了・削除できる
 - 画面再読み込み後に状態が維持される
 
-## 11. 今後の拡張候補
+## 12. 今後の拡張候補
 
 - 招待コードと招待リンク
 - タグやカテゴリ
@@ -159,25 +167,9 @@ NEXT_PUBLIC_APP_URL=https://your-project.vercel.app
 - 完了アイテムの自動削除
 - Realtime 同期
 
-## 12. このアプリで大事な注意点
+## 13. セキュリティ上の注意点
 
 - Supabase のサービスロールキーはブラウザに直接置かない
 - すべての API でリスト所属確認を行う
 - 認可は API 側と RLS の両方で守る
-- 本番では Google OAuth のコールバック URL を必ず設定する
-
-## 13. あなたがやるべき作業
-
-最初の本番準備では、以下を順番に行います。
-
-1. Supabase プロジェクトを作成する
-2. Google OAuth を有効化する
-3. `.env.local` に環境変数を設定する
-4. [docs/DB_SCHEMA.md](docs/DB_SCHEMA.md) の SQL を Supabase に実行する
-5. RLS を設定して、一覧・メンバー管理・アイテム管理が動くようにする
-6. GitHub に push する
-7. Vercel でプロジェクトをインポートする
-8. Vercel の環境変数を本番用に設定する
-9. 初回デプロイ後にログインとリスト作成をテストする
-
-この README は、デプロイ前の準備に必要な情報が揃う形で整理しています。
+- 本番では Google OAuth と Supabase のリダイレクト URL 設定を必ず確認する
