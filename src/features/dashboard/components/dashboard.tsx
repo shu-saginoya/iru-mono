@@ -1,6 +1,6 @@
 "use client";
 
-import { Edit3, Settings, Trash2, UserMinus, Users, X } from "lucide-react";
+import { Settings } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   replaceItem,
@@ -8,6 +8,10 @@ import {
   toggleItemOptimistically,
   type Item,
 } from "@/features/dashboard/item-state";
+import { ItemList } from "@/features/dashboard/components/item-list";
+import { ItemModal } from "@/features/dashboard/components/item-modal";
+import { Sidebar } from "@/features/dashboard/components/sidebar";
+import { ListSettingsModal } from "@/features/dashboard/components/list-settings-modal";
 
 type ShoppingList = { id: string; name: string };
 type ListDetails = { id: string; name: string; created_by: string };
@@ -575,56 +579,17 @@ export function Dashboard({
         />
       )}
       <div className="workspace">
-        <aside className={isSidebarOpen ? "sidebar open" : "sidebar"}>
-          <div className="sidebar-header">
-            <div className="section-heading">
-              <h2>リスト</h2>
-              <span>{lists.length}</span>
-            </div>
-            <button
-              className="sidebar-close"
-              onClick={() => setIsSidebarOpen(false)}
-              aria-label="リストを閉じる"
-            >
-              ×
-            </button>
-          </div>
-          <div className="list-links">
-            {lists.map((list) => (
-              <button
-                className={
-                  list.id === selectedListId ? "list-link active" : "list-link"
-                }
-                key={list.id}
-                onClick={() => selectList(list.id)}
-              >
-                {list.name}
-              </button>
-            ))}
-          </div>
-          <form className="stack-form" onSubmit={createList}>
-            <label htmlFor="list-name">新しいリスト</label>
-            <div className="inline-form">
-              <input
-                id="list-name"
-                value={listName}
-                onChange={(event) => setListName(event.target.value)}
-                placeholder="例: 今週の買い物"
-                maxLength={100}
-                required
-                disabled={isCreatingList}
-              />
-              <button
-                className="icon-button"
-                aria-label="リストを作成"
-                title="リストを作成"
-                disabled={isCreatingList}
-              >
-                {isCreatingList ? "…" : "+"}
-              </button>
-            </div>
-          </form>
-        </aside>
+        <Sidebar
+          lists={lists}
+          selectedListId={selectedListId}
+          listName={listName}
+          isSidebarOpen={isSidebarOpen}
+          isCreatingList={isCreatingList}
+          onClose={() => setIsSidebarOpen(false)}
+          onSelectList={selectList}
+          onListNameChange={setListName}
+          onCreateList={createList}
+        />
         <section className="content-panel">
           <div className="content-heading">
             <div>
@@ -662,57 +627,14 @@ export function Dashboard({
             )}
           </div>
           {selectedListId ? (
-            <div className="items-list">
-              {items.length ? (
-                items.map((item) => (
-                  <article className="item-row" key={item.id}>
-                    <button
-                      className={item.is_completed ? "check checked" : "check"}
-                      onClick={() => toggleItem(item.id)}
-                      disabled={busyItemId === item.id}
-                      aria-label={
-                        item.is_completed ? "未完了に戻す" : "完了にする"
-                      }
-                    >
-                      {item.is_completed ? "✓" : ""}
-                    </button>
-                    <div className="item-copy">
-                      <strong>{item.title}</strong>
-                      <span>数量 {item.quantity}</span>
-                    </div>
-                    <button
-                      className="utility-button"
-                      onClick={() => openItemModal(item)}
-                      disabled={busyItemId === item.id}
-                      aria-label="アイテムを編集"
-                      title="アイテムを編集"
-                    >
-                      <Edit3 size={16} />
-                    </button>
-                    {!item.is_completed && (
-                      <button
-                        className="delete-button"
-                        onClick={() => deleteItem(item)}
-                        disabled={busyItemId === item.id}
-                        aria-label="削除"
-                        title="削除"
-                      >
-                        <Trash2 size={17} />
-                      </button>
-                    )}
-                  </article>
-                ))
-              ) : (
-                <div className="empty-state">
-                  <span>{showCompleted ? "○" : "＋"}</span>
-                  <p>
-                    {showCompleted
-                      ? "完了済みのアイテムはありません"
-                      : "右下の＋から買い物を追加しましょう"}
-                  </p>
-                </div>
-              )}
-            </div>
+            <ItemList
+              items={items}
+              showCompleted={showCompleted}
+              busyItemId={busyItemId}
+              onToggle={toggleItem}
+              onEdit={openItemModal}
+              onDelete={deleteItem}
+            />
           ) : (
             <div className="empty-state large">
               <span>＋</span>
@@ -737,230 +659,38 @@ export function Dashboard({
         </button>
       )}
       {isItemModalOpen && (
-        <div className="modal-backdrop" onMouseDown={closeItemModal}>
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="item-modal-title"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="modal-heading">
-              <h2 id="item-modal-title">
-                {editingItem ? "アイテムを編集" : "アイテムを追加"}
-              </h2>
-              <button
-                className="sidebar-close"
-                onClick={closeItemModal}
-                disabled={isCreatingItem}
-                aria-label="閉じる"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <form className="modal-form" onSubmit={saveItem}>
-              <label htmlFor="item-title">商品名</label>
-              <input
-                ref={itemTitleInput}
-                id="item-title"
-                value={itemTitle}
-                onChange={(event) => setItemTitle(event.target.value)}
-                placeholder="例: 牛乳"
-                maxLength={255}
-                required
-                disabled={isCreatingItem}
-              />
-              <label htmlFor="item-quantity">数量</label>
-              <input
-                id="item-quantity"
-                type="number"
-                min={1}
-                max={999}
-                value={quantity}
-                onChange={(event) => setQuantity(Number(event.target.value))}
-                required
-                disabled={isCreatingItem}
-              />
-              {itemError && (
-                <p className="error-message" role="alert">
-                  {itemError}
-                </p>
-              )}
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="quiet-button"
-                  onClick={closeItemModal}
-                  disabled={isCreatingItem}
-                >
-                  キャンセル
-                </button>
-                <button className="primary-button" disabled={isCreatingItem}>
-                  {isCreatingItem ? "保存中…" : editingItem ? "保存" : "追加"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
+        <ItemModal
+          editingItem={editingItem}
+          itemTitle={itemTitle}
+          quantity={quantity}
+          itemError={itemError}
+          isCreatingItem={isCreatingItem}
+          itemTitleInput={itemTitleInput}
+          onClose={closeItemModal}
+          onSubmit={saveItem}
+          onTitleChange={setItemTitle}
+          onQuantityChange={setQuantity}
+        />
       )}
       {isListModalOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={() =>
-            !isSavingList && !isManagingMember && setIsListModalOpen(false)
-          }
-        >
-          <section
-            className="modal list-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="list-modal-title"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="modal-heading">
-              <div>
-                <p className="eyebrow">LIST SETTINGS</p>
-                <h2 id="list-modal-title">リストを管理</h2>
-              </div>
-              <button
-                className="sidebar-close"
-                onClick={() => setIsListModalOpen(false)}
-                disabled={isSavingList || isManagingMember}
-                aria-label="閉じる"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            {listDetails ? (
-              <>
-                <section className="settings-section">
-                  <h3>リスト名</h3>
-                  {listDetails.created_by === userId ? (
-                    <form
-                      className="inline-form settings-form"
-                      onSubmit={updateList}
-                    >
-                      <input
-                        value={editedListName}
-                        onChange={(event) =>
-                          setEditedListName(event.target.value)
-                        }
-                        maxLength={100}
-                        required
-                        disabled={isSavingList}
-                      />
-                      <button
-                        className="primary-button"
-                        disabled={isSavingList}
-                      >
-                        {isSavingList ? "保存中…" : "保存"}
-                      </button>
-                    </form>
-                  ) : (
-                    <p>{listDetails.name}</p>
-                  )}
-                </section>
-                <section className="settings-section">
-                  <div className="settings-heading">
-                    <h3>
-                      <Users size={18} /> メンバー
-                    </h3>
-                    <span>{members.length}人</span>
-                  </div>
-                  {listDetails.created_by === userId && (
-                    <form className="member-form" onSubmit={addMember}>
-                      <label htmlFor="member-user-id">ユーザーID</label>
-                      <div className="inline-form">
-                        <input
-                          id="member-user-id"
-                          value={memberUserId}
-                          onChange={(event) =>
-                            setMemberUserId(event.target.value)
-                          }
-                          placeholder="Supabase UUID"
-                          required
-                          disabled={isManagingMember}
-                        />
-                        <button
-                          className="primary-button"
-                          disabled={isManagingMember}
-                        >
-                          {isManagingMember ? "追加中…" : "追加"}
-                        </button>
-                      </div>
-                    </form>
-                  )}
-                  <div className="members-list">
-                    {members.map((member) => (
-                      <div className="member-row" key={member.user_id}>
-                        <div>
-                          <strong>
-                            {member.users?.display_name || "名前未設定"}
-                          </strong>
-                          <span>
-                            {member.user_id === listDetails.created_by
-                              ? "作成者"
-                              : member.user_id === userId
-                                ? "あなた"
-                                : member.user_id}
-                          </span>
-                        </div>
-                        {listDetails.created_by === userId &&
-                          member.user_id !== listDetails.created_by && (
-                            <button
-                              className="utility-button danger"
-                              onClick={() => removeMember(member.user_id)}
-                              disabled={isManagingMember}
-                              aria-label="メンバーを除外"
-                              title="メンバーを除外"
-                            >
-                              <UserMinus size={17} />
-                            </button>
-                          )}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-                <section className="settings-section danger-zone">
-                  {listDetails.created_by === userId ? (
-                    <>
-                      <h3>リストを削除</h3>
-                      <p>リスト内のアイテムとメンバー情報も削除されます。</p>
-                      <button
-                        className="danger-button"
-                        onClick={deleteList}
-                        disabled={isSavingList}
-                      >
-                        リストを削除
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <h3>このリストから退会</h3>
-                      <p>
-                        退会後は、メンバーに追加されるまでリストにアクセスできません。
-                      </p>
-                      <button
-                        className="danger-button"
-                        onClick={leaveList}
-                        disabled={isManagingMember}
-                      >
-                        リストから退会
-                      </button>
-                    </>
-                  )}
-                </section>
-              </>
-            ) : (
-              <p className="modal-loading">リスト情報を読み込んでいます…</p>
-            )}
-            {listError && (
-              <p className="error-message" role="alert">
-                {listError}
-              </p>
-            )}
-          </section>
-        </div>
+        <ListSettingsModal
+          userId={userId}
+          listDetails={listDetails}
+          members={members}
+          editedListName={editedListName}
+          memberUserId={memberUserId}
+          listError={listError}
+          isSavingList={isSavingList}
+          isManagingMember={isManagingMember}
+          onClose={() => setIsListModalOpen(false)}
+          onUpdateList={updateList}
+          onEditedListNameChange={setEditedListName}
+          onAddMember={addMember}
+          onMemberUserIdChange={setMemberUserId}
+          onRemoveMember={removeMember}
+          onLeaveList={leaveList}
+          onDeleteList={deleteList}
+        />
       )}
     </main>
   );
