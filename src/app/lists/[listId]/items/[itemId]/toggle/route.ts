@@ -17,12 +17,17 @@ export async function PATCH(_request: Request, { params }: Context) {
       { error: "Access denied", code: "FORBIDDEN" },
       { status: 403 },
     );
-  const { data: item } = await access.supabase
+  const { data: item, error: readError } = await access.supabase
     .from("items")
     .select("*")
     .eq("id", itemId)
     .eq("list_id", listId)
     .maybeSingle();
+  if (readError)
+    return Response.json(
+      { error: readError.message, code: "ITEM_READ_FAILED" },
+      { status: 500 },
+    );
   if (!item)
     return Response.json(
       { error: "Item not found", code: "ITEM_NOT_FOUND" },

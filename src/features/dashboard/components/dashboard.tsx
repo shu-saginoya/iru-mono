@@ -2,14 +2,14 @@
 
 import { Edit3, Settings, Trash2, UserMinus, Users, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  replaceItem,
+  rollbackItemMutation,
+  toggleItemOptimistically,
+  type Item,
+} from "@/features/dashboard/item-state";
 
 type ShoppingList = { id: string; name: string };
-type Item = {
-  id: string;
-  title: string;
-  quantity: number;
-  is_completed: boolean;
-};
 type ListDetails = { id: string; name: string; created_by: string };
 type Member = {
   user_id: string;
@@ -29,6 +29,27 @@ async function getRequestError(response: Response, fallback: string) {
       : (data.error ?? fallback);
   } catch {
     return fallback;
+  }
+}
+
+async function requestJson<T>(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  fallback: string,
+) {
+  let response: Response;
+  try {
+    response = await fetch(input, init);
+  } catch {
+    throw new Error("通信に失敗しました。接続を確認してください");
+  }
+  if (!response.ok) {
+    throw new Error(await getRequestError(response, fallback));
+  }
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new Error(fallback);
   }
 }
 
@@ -62,8 +83,14 @@ export function Dashboard({
   const [members, setMembers] = useState<Member[]>([]);
   const [editedListName, setEditedListName] = useState("");
   const [memberUserId, setMemberUserId] = useState("");
+  const itemsRef = useRef(items);
+  const itemsRequestId = useRef(0);
   const itemTitleInput = useRef<HTMLInputElement>(null);
   const lastListKey = `iru-mono:last-list:${userId}`;
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   const loadLists = useCallback(async () => {
     const response = await fetch("/lists");
@@ -79,15 +106,21 @@ export function Dashboard({
 
   const loadItems = useCallback(
     async (listId: string) => {
-      if (!listId) return setItems([]);
-      const status = showCompleted ? "completed" : "pending";
-      const response = await fetch(`/lists/${listId}/items?status=${status}`);
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(response, "アイテムを取得できませんでした"),
+      const requestId = ++itemsRequestId.current;
+      if (!listId) {
+        setItems([]);
+        return;
+      }
+      const data = await requestJson<{ items: Item[] }>(
+        `/lists/${listId}/items?status=all&limit=100`,
+        {},
+        "アイテムを取得できませんでした",
+      );
+      if (requestId === itemsRequestId.current) {
+        setItems(
+          data.items.filter((item) => item.is_completed === showCompleted),
         );
-      const data = (await response.json()) as { items: Item[] };
-      setItems(data.items);
+      }
     },
     [showCompleted],
   );
@@ -219,32 +252,64 @@ export function Dashboard({
     if (!selectedListId || isCreatingItem) return;
     setIsCreatingItem(true);
     setItemError("");
+    const listId = selectedListId;
+    const itemBeingEdited = editingItem;
+    const optimisticId = `optimistic-${crypto.randomUUID()}`;
+    const optimisticItem: Item = {
+      id: optimisticId,
+      title: itemTitle.trim(),
+      quantity,
+      is_completed: false,
+    };
     try {
-      const response = await fetch(
-        editingItem
-          ? `/lists/${selectedListId}/items/${editingItem.id}`
-          : `/lists/${selectedListId}/items`,
+      if (!itemBeingEdited && !showCompleted) {
+        const nextItems = [optimisticItem, ...itemsRef.current];
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      }
+      const data = await requestJson<{ item: Item }>(
+        itemBeingEdited
+          ? `/lists/${listId}/items/${itemBeingEdited.id}`
+          : `/lists/${listId}/items`,
         {
-          method: editingItem ? "PUT" : "POST",
+          method: itemBeingEdited ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: itemTitle, quantity }),
         },
+        itemBeingEdited
+          ? "アイテムを編集できませんでした"
+          : "アイテムを追加できませんでした",
       );
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(
-            response,
-            editingItem
-              ? "アイテムを編集できませんでした"
-              : "アイテムを追加できませんでした",
-          ),
+      if (!itemBeingEdited) {
+        const nextItems = replaceItem(
+          itemsRef.current,
+          optimisticId,
+          data.item,
         );
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      } else {
+        const nextItems = replaceItem(
+          itemsRef.current,
+          itemBeingEdited.id,
+          data.item,
+        );
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      }
       setItemTitle("");
       setQuantity(1);
       setEditingItem(null);
       setIsItemModalOpen(false);
       await loadItems(selectedListId);
     } catch (cause) {
+      if (!itemBeingEdited) {
+        const nextItems = itemsRef.current.filter(
+          (item) => item.id !== optimisticId,
+        );
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      }
       setItemError(
         cause instanceof Error
           ? cause.message
@@ -257,16 +322,32 @@ export function Dashboard({
 
   async function toggleItem(itemId: string) {
     if (busyItemId) return;
+    const optimistic = toggleItemOptimistically(
+      itemsRef.current,
+      itemId,
+      showCompleted,
+    );
+    if (!optimistic.snapshot) return;
+    itemsRef.current = optimistic.items;
+    setItems(optimistic.items);
     setBusyItemId(itemId);
     setError("");
     try {
-      const response = await fetch(
+      const data = await requestJson<{ item: Item }>(
         `/lists/${selectedListId}/items/${itemId}/toggle`,
         { method: "PATCH" },
+        "アイテムの状態を変更できませんでした",
       );
-      if (!response.ok) throw new Error("アイテムの状態を変更できませんでした");
-      await loadItems(selectedListId);
+      const nextItems = replaceItem(itemsRef.current, itemId, data.item);
+      itemsRef.current = nextItems;
+      setItems(nextItems);
     } catch (cause) {
+      const nextItems = rollbackItemMutation(
+        itemsRef.current,
+        optimistic.snapshot,
+      );
+      itemsRef.current = nextItems;
+      setItems(nextItems);
       setError(
         cause instanceof Error
           ? cause.message
@@ -588,7 +669,7 @@ export function Dashboard({
                     <button
                       className={item.is_completed ? "check checked" : "check"}
                       onClick={() => toggleItem(item.id)}
-                      disabled={busyItemId !== null}
+                      disabled={busyItemId === item.id}
                       aria-label={
                         item.is_completed ? "未完了に戻す" : "完了にする"
                       }
@@ -602,7 +683,7 @@ export function Dashboard({
                     <button
                       className="utility-button"
                       onClick={() => openItemModal(item)}
-                      disabled={busyItemId !== null}
+                      disabled={busyItemId === item.id}
                       aria-label="アイテムを編集"
                       title="アイテムを編集"
                     >
@@ -612,7 +693,7 @@ export function Dashboard({
                       <button
                         className="delete-button"
                         onClick={() => deleteItem(item)}
-                        disabled={busyItemId !== null}
+                        disabled={busyItemId === item.id}
                         aria-label="削除"
                         title="削除"
                       >
