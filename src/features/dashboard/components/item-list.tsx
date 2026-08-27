@@ -6,7 +6,7 @@ import type { Item } from "@/features/dashboard/item-state";
 type ItemListProps = {
   items: Item[];
   showCompleted: boolean;
-  busyItemId: string | null;
+  busyItemIds: string[];
   onToggle: (itemId: string) => void;
   onEdit: (item: Item) => void;
   onDelete: (item: Item) => void;
@@ -15,7 +15,7 @@ type ItemListProps = {
 export function ItemList({
   items,
   showCompleted,
-  busyItemId,
+  busyItemIds,
   onToggle,
   onEdit,
   onDelete,
@@ -40,7 +40,7 @@ export function ItemList({
           <button
             className={item.is_completed ? "check checked" : "check"}
             onClick={() => onToggle(item.id)}
-            disabled={busyItemId === item.id}
+            disabled={busyItemIds.includes(item.id)}
             aria-label={item.is_completed ? "未完了に戻す" : "完了にする"}
           >
             {item.is_completed ? "✓" : ""}
@@ -52,7 +52,7 @@ export function ItemList({
           <button
             className="utility-button"
             onClick={() => onEdit(item)}
-            disabled={busyItemId === item.id}
+            disabled={busyItemIds.includes(item.id)}
             aria-label="アイテムを編集"
             title="アイテムを編集"
           >
@@ -62,7 +62,7 @@ export function ItemList({
             <button
               className="delete-button"
               onClick={() => onDelete(item)}
-              disabled={busyItemId === item.id}
+              disabled={busyItemIds.includes(item.id)}
               aria-label="削除"
               title="削除"
             >

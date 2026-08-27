@@ -10,25 +10,15 @@ export type ItemMutationSnapshot = {
   index: number;
 };
 
-function isVisible(item: Item, showCompleted: boolean) {
-  return item.is_completed === showCompleted;
-}
-
-export function toggleItemOptimistically(
-  items: Item[],
-  itemId: string,
-  showCompleted: boolean,
-) {
+export function toggleItemOptimistically(items: Item[], itemId: string) {
   const index = items.findIndex((item) => item.id === itemId);
   if (index === -1) return { items, snapshot: null };
 
   const item = items[index];
   const updatedItem = { ...item, is_completed: !item.is_completed };
-  const nextItems = isVisible(updatedItem, showCompleted)
-    ? items.map((current, currentIndex) =>
-        currentIndex === index ? updatedItem : current,
-      )
-    : items.filter((_, currentIndex) => currentIndex !== index);
+  const nextItems = items.map((current, currentIndex) =>
+    currentIndex === index ? updatedItem : current,
+  );
 
   return {
     items: nextItems,

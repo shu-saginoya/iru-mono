@@ -78,7 +78,7 @@ export function Dashboard({
   const [isCreatingItem, setIsCreatingItem] = useState(false);
   const [isSavingList, setIsSavingList] = useState(false);
   const [isManagingMember, setIsManagingMember] = useState(false);
-  const [busyItemId, setBusyItemId] = useState<string | null>(null);
+  const [busyItemIds, setBusyItemIds] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [itemError, setItemError] = useState("");
   const [listError, setListError] = useState("");
@@ -108,26 +108,34 @@ export function Dashboard({
     setSelectedListId((current) => current || initialListId);
   }, [lastListKey]);
 
-  const loadItems = useCallback(
-    async (listId: string) => {
-      const requestId = ++itemsRequestId.current;
-      if (!listId) {
-        setItems([]);
-        return;
-      }
-      const data = await requestJson<{ items: Item[] }>(
-        `/lists/${listId}/items?status=all&limit=100`,
+  const loadItems = useCallback(async (listId: string) => {
+    const requestId = ++itemsRequestId.current;
+    if (!listId) {
+      setItems([]);
+      return;
+    }
+    const pageSize = 100;
+    const allItems: Item[] = [];
+    let offset = 0;
+    let total = 0;
+    do {
+      const data = await requestJson<{
+        items: Item[];
+        pagination: { total: number };
+      }>(
+        `/lists/${listId}/items?status=all&limit=${pageSize}&offset=${offset}`,
         {},
         "アイテムを取得できませんでした",
       );
-      if (requestId === itemsRequestId.current) {
-        setItems(
-          data.items.filter((item) => item.is_completed === showCompleted),
-        );
-      }
-    },
-    [showCompleted],
-  );
+      allItems.push(...data.items);
+      total = data.pagination.total;
+      offset += data.items.length;
+      if (!data.items.length) break;
+    } while (offset < total);
+    if (requestId === itemsRequestId.current) {
+      setItems(allItems);
+    }
+  }, []);
 
   async function loadListDetails(listId: string) {
     const response = await fetch(`/lists/${listId}`);
@@ -231,18 +239,27 @@ export function Dashboard({
     if (isCreatingList) return;
     setIsCreatingList(true);
     setError("");
+    const optimisticId = `optimistic-${crypto.randomUUID()}`;
+    const optimisticList = { id: optimisticId, name: listName.trim() };
+    setLists((current) => [optimisticList, ...current]);
     try {
       const response = await fetch("/lists", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: listName }),
       });
-      if (!response.ok) throw new Error("リストを作成できませんでした");
+      if (!response.ok)
+        throw new Error(
+          await getRequestError(response, "リストを作成できませんでした"),
+        );
       const data = (await response.json()) as { list: ShoppingList };
-      setLists((current) => [data.list, ...current]);
+      setLists((current) =>
+        current.map((list) => (list.id === optimisticId ? data.list : list)),
+      );
       selectList(data.list.id);
       setListName("");
     } catch (cause) {
+      setLists((current) => current.filter((list) => list.id !== optimisticId));
       setError(
         cause instanceof Error ? cause.message : "リストを作成できませんでした",
       );
@@ -259,6 +276,7 @@ export function Dashboard({
     const listId = selectedListId;
     const itemBeingEdited = editingItem;
     const optimisticId = `optimistic-${crypto.randomUUID()}`;
+    const previousItems = itemsRef.current;
     const optimisticItem: Item = {
       id: optimisticId,
       title: itemTitle.trim(),
@@ -266,8 +284,16 @@ export function Dashboard({
       is_completed: false,
     };
     try {
-      if (!itemBeingEdited && !showCompleted) {
+      if (!itemBeingEdited) {
         const nextItems = [optimisticItem, ...itemsRef.current];
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      } else {
+        const nextItems = replaceItem(itemsRef.current, itemBeingEdited.id, {
+          ...itemBeingEdited,
+          title: itemTitle.trim(),
+          quantity,
+        });
         itemsRef.current = nextItems;
         setItems(nextItems);
       }
@@ -313,6 +339,9 @@ export function Dashboard({
         );
         itemsRef.current = nextItems;
         setItems(nextItems);
+      } else {
+        itemsRef.current = previousItems;
+        setItems(previousItems);
       }
       setItemError(
         cause instanceof Error
@@ -325,16 +354,12 @@ export function Dashboard({
   }
 
   async function toggleItem(itemId: string) {
-    if (busyItemId) return;
-    const optimistic = toggleItemOptimistically(
-      itemsRef.current,
-      itemId,
-      showCompleted,
-    );
+    if (busyItemIds.includes(itemId)) return;
+    const optimistic = toggleItemOptimistically(itemsRef.current, itemId);
     if (!optimistic.snapshot) return;
     itemsRef.current = optimistic.items;
     setItems(optimistic.items);
-    setBusyItemId(itemId);
+    setBusyItemIds((current) => [...current, itemId]);
     setError("");
     try {
       const data = await requestJson<{ item: Item }>(
@@ -358,30 +383,47 @@ export function Dashboard({
           : "アイテムの状態を変更できませんでした",
       );
     } finally {
-      setBusyItemId(null);
+      setBusyItemIds((current) => current.filter((id) => id !== itemId));
     }
   }
 
   async function deleteItem(item: Item) {
-    if (busyItemId || !window.confirm(`「${item.title}」を削除しますか？`))
+    if (
+      busyItemIds.includes(item.id) ||
+      !window.confirm(`「${item.title}」を削除しますか？`)
+    )
       return;
-    setBusyItemId(item.id);
+    const itemIndex = itemsRef.current.findIndex(
+      (current) => current.id === item.id,
+    );
+    const nextItems = itemsRef.current.filter(
+      (current) => current.id !== item.id,
+    );
+    itemsRef.current = nextItems;
+    setItems(nextItems);
+    setBusyItemIds((current) => [...current, item.id]);
     setError("");
     try {
       const response = await fetch(
         `/lists/${selectedListId}/items/${item.id}`,
         { method: "DELETE" },
       );
-      if (!response.ok) throw new Error("アイテムを削除できませんでした");
-      await loadItems(selectedListId);
+      if (!response.ok)
+        throw new Error(
+          await getRequestError(response, "アイテムを削除できませんでした"),
+        );
     } catch (cause) {
+      const restoredItems = [...itemsRef.current];
+      restoredItems.splice(itemIndex, 0, item);
+      itemsRef.current = restoredItems;
+      setItems(restoredItems);
       setError(
         cause instanceof Error
           ? cause.message
           : "アイテムを削除できませんでした",
       );
     } finally {
-      setBusyItemId(null);
+      setBusyItemIds((current) => current.filter((id) => id !== item.id));
     }
   }
 
@@ -390,6 +432,16 @@ export function Dashboard({
     if (!selectedListId || isSavingList) return;
     setIsSavingList(true);
     setListError("");
+    const previousName = lists.find((list) => list.id === selectedListId)?.name;
+    const nextName = editedListName.trim();
+    setLists((current) =>
+      current.map((list) =>
+        list.id === selectedListId ? { ...list, name: nextName } : list,
+      ),
+    );
+    setListDetails((current) =>
+      current ? { ...current, name: nextName } : current,
+    );
     try {
       const response = await fetch(`/lists/${selectedListId}`, {
         method: "PUT",
@@ -410,6 +462,17 @@ export function Dashboard({
         current ? { ...current, name: data.list.name } : current,
       );
     } catch (cause) {
+      if (previousName !== undefined) {
+        setLists((current) =>
+          current.map((list) =>
+            list.id === selectedListId ? { ...list, name: previousName } : list,
+          ),
+        );
+        setListDetails((current) =>
+          current ? { ...current, name: previousName } : current,
+        );
+        setEditedListName(previousName);
+      }
       setListError(
         cause instanceof Error
           ? cause.message
@@ -487,8 +550,13 @@ export function Dashboard({
       return;
     setIsManagingMember(true);
     setListError("");
+    const leavingListId = selectedListId;
+    const previousLists = lists;
+    setLists((current) => current.filter((list) => list.id !== leavingListId));
+    setSelectedListId("");
+    setIsListModalOpen(false);
     try {
-      const response = await fetch(`/lists/${selectedListId}/membership`, {
+      const response = await fetch(`/lists/${leavingListId}/membership`, {
         method: "DELETE",
       });
       if (!response.ok)
@@ -496,10 +564,11 @@ export function Dashboard({
           await getRequestError(response, "リストから退会できませんでした"),
         );
       localStorage.removeItem(lastListKey);
-      setIsListModalOpen(false);
-      setSelectedListId("");
       await loadLists();
     } catch (cause) {
+      setLists(previousLists);
+      setSelectedListId(leavingListId);
+      setIsListModalOpen(true);
       setListError(
         cause instanceof Error
           ? cause.message
@@ -521,8 +590,13 @@ export function Dashboard({
       return;
     setIsSavingList(true);
     setListError("");
+    const deletingListId = selectedListId;
+    const previousLists = lists;
+    setLists((current) => current.filter((list) => list.id !== deletingListId));
+    setSelectedListId("");
+    setIsListModalOpen(false);
     try {
-      const response = await fetch(`/lists/${selectedListId}`, {
+      const response = await fetch(`/lists/${deletingListId}`, {
         method: "DELETE",
       });
       if (!response.ok)
@@ -530,10 +604,11 @@ export function Dashboard({
           await getRequestError(response, "リストを削除できませんでした"),
         );
       localStorage.removeItem(lastListKey);
-      setIsListModalOpen(false);
-      setSelectedListId("");
       await loadLists();
     } catch (cause) {
+      setLists(previousLists);
+      setSelectedListId(deletingListId);
+      setIsListModalOpen(true);
       setListError(
         cause instanceof Error ? cause.message : "リストを削除できませんでした",
       );
@@ -628,9 +703,11 @@ export function Dashboard({
           </div>
           {selectedListId ? (
             <ItemList
-              items={items}
+              items={items.filter(
+                (item) => item.is_completed === showCompleted,
+              )}
               showCompleted={showCompleted}
-              busyItemId={busyItemId}
+              busyItemIds={busyItemIds}
               onToggle={toggleItem}
               onEdit={openItemModal}
               onDelete={deleteItem}
