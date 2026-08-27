@@ -39,6 +39,8 @@ await supabase.auth.signInWithOAuth({
 | DELETE | `/lists/:listId/members/:userId` | 作成者がメンバー除外         |
 | DELETE | `/lists/:listId/membership`      | 自分が退会                   |
 
+`GET /lists` は所属リストを `updated_at` の降順で返す。`updated_at` はリスト自身の作成・名前変更時に更新し、アイテムの変更では更新しない。
+
 `POST /lists/:listId/members` の初回リクエスト:
 
 ```json
@@ -65,8 +67,10 @@ await supabase.auth.signInWithOAuth({
 
 - `status`: `pending`（既定） / `completed` / `all`
 - `sort`: `createdAt:desc`（既定） / `updatedAt:desc`
-- `limit`: 既定 50、最大 100
+- `limit`: 既定 50、最大 100。全件が必要な画面は`offset`を増やして複数回取得する
 - `offset`: 既定 0
+
+`status=all` を指定した場合もページングを適用する。レスポンスの `pagination.total` は、指定したステータスに該当する全件数を返す。
 
 ## 5. アイテムの状態
 
