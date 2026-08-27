@@ -7,6 +7,14 @@ const updateSchema = z.object({
 });
 type Context = { params: Promise<{ listId: string; itemId: string }> };
 
+async function readJson(request: Request) {
+  try {
+    return await request.json();
+  } catch {
+    return undefined;
+  }
+}
+
 async function getItem(
   context: Awaited<ReturnType<typeof getAuthContext>>,
   listId: string,
@@ -39,7 +47,7 @@ export async function PUT(request: Request, { params }: Context) {
       { error: "Item not found", code: "ITEM_NOT_FOUND" },
       { status: 404 },
     );
-  const parsed = updateSchema.safeParse(await request.json());
+  const parsed = updateSchema.safeParse(await readJson(request));
   if (!parsed.success)
     return Response.json(
       {

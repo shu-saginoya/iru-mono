@@ -1,15 +1,19 @@
 "use client";
 
-import { Edit3, Settings, Trash2, UserMinus, Users, X } from "lucide-react";
+import { Settings } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  replaceItem,
+  rollbackItemMutation,
+  toggleItemOptimistically,
+  type Item,
+} from "@/features/dashboard/item-state";
+import { ItemList } from "@/features/dashboard/components/item-list";
+import { ItemModal } from "@/features/dashboard/components/item-modal";
+import { Sidebar } from "@/features/dashboard/components/sidebar";
+import { ListSettingsModal } from "@/features/dashboard/components/list-settings-modal";
 
 type ShoppingList = { id: string; name: string };
-type Item = {
-  id: string;
-  title: string;
-  quantity: number;
-  is_completed: boolean;
-};
 type ListDetails = { id: string; name: string; created_by: string };
 type Member = {
   user_id: string;
@@ -29,6 +33,27 @@ async function getRequestError(response: Response, fallback: string) {
       : (data.error ?? fallback);
   } catch {
     return fallback;
+  }
+}
+
+async function requestJson<T>(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  fallback: string,
+) {
+  let response: Response;
+  try {
+    response = await fetch(input, init);
+  } catch {
+    throw new Error("通信に失敗しました。接続を確認してください");
+  }
+  if (!response.ok) {
+    throw new Error(await getRequestError(response, fallback));
+  }
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new Error(fallback);
   }
 }
 
@@ -53,7 +78,7 @@ export function Dashboard({
   const [isCreatingItem, setIsCreatingItem] = useState(false);
   const [isSavingList, setIsSavingList] = useState(false);
   const [isManagingMember, setIsManagingMember] = useState(false);
-  const [busyItemId, setBusyItemId] = useState<string | null>(null);
+  const [busyItemIds, setBusyItemIds] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [itemError, setItemError] = useState("");
   const [listError, setListError] = useState("");
@@ -62,8 +87,14 @@ export function Dashboard({
   const [members, setMembers] = useState<Member[]>([]);
   const [editedListName, setEditedListName] = useState("");
   const [memberUserId, setMemberUserId] = useState("");
+  const itemsRef = useRef(items);
+  const itemsRequestId = useRef(0);
   const itemTitleInput = useRef<HTMLInputElement>(null);
   const lastListKey = `iru-mono:last-list:${userId}`;
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   const loadLists = useCallback(async () => {
     const response = await fetch("/lists");
@@ -77,20 +108,34 @@ export function Dashboard({
     setSelectedListId((current) => current || initialListId);
   }, [lastListKey]);
 
-  const loadItems = useCallback(
-    async (listId: string) => {
-      if (!listId) return setItems([]);
-      const status = showCompleted ? "completed" : "pending";
-      const response = await fetch(`/lists/${listId}/items?status=${status}`);
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(response, "アイテムを取得できませんでした"),
-        );
-      const data = (await response.json()) as { items: Item[] };
-      setItems(data.items);
-    },
-    [showCompleted],
-  );
+  const loadItems = useCallback(async (listId: string) => {
+    const requestId = ++itemsRequestId.current;
+    if (!listId) {
+      setItems([]);
+      return;
+    }
+    const pageSize = 100;
+    const allItems: Item[] = [];
+    let offset = 0;
+    let total = 0;
+    do {
+      const data = await requestJson<{
+        items: Item[];
+        pagination: { total: number };
+      }>(
+        `/lists/${listId}/items?status=all&limit=${pageSize}&offset=${offset}`,
+        {},
+        "アイテムを取得できませんでした",
+      );
+      allItems.push(...data.items);
+      total = data.pagination.total;
+      offset += data.items.length;
+      if (!data.items.length) break;
+    } while (offset < total);
+    if (requestId === itemsRequestId.current) {
+      setItems(allItems);
+    }
+  }, []);
 
   async function loadListDetails(listId: string) {
     const response = await fetch(`/lists/${listId}`);
@@ -194,18 +239,27 @@ export function Dashboard({
     if (isCreatingList) return;
     setIsCreatingList(true);
     setError("");
+    const optimisticId = `optimistic-${crypto.randomUUID()}`;
+    const optimisticList = { id: optimisticId, name: listName.trim() };
+    setLists((current) => [optimisticList, ...current]);
     try {
       const response = await fetch("/lists", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: listName }),
       });
-      if (!response.ok) throw new Error("リストを作成できませんでした");
+      if (!response.ok)
+        throw new Error(
+          await getRequestError(response, "リストを作成できませんでした"),
+        );
       const data = (await response.json()) as { list: ShoppingList };
-      setLists((current) => [data.list, ...current]);
+      setLists((current) =>
+        current.map((list) => (list.id === optimisticId ? data.list : list)),
+      );
       selectList(data.list.id);
       setListName("");
     } catch (cause) {
+      setLists((current) => current.filter((list) => list.id !== optimisticId));
       setError(
         cause instanceof Error ? cause.message : "リストを作成できませんでした",
       );
@@ -219,32 +273,76 @@ export function Dashboard({
     if (!selectedListId || isCreatingItem) return;
     setIsCreatingItem(true);
     setItemError("");
+    const listId = selectedListId;
+    const itemBeingEdited = editingItem;
+    const optimisticId = `optimistic-${crypto.randomUUID()}`;
+    const previousItems = itemsRef.current;
+    const optimisticItem: Item = {
+      id: optimisticId,
+      title: itemTitle.trim(),
+      quantity,
+      is_completed: false,
+    };
     try {
-      const response = await fetch(
-        editingItem
-          ? `/lists/${selectedListId}/items/${editingItem.id}`
-          : `/lists/${selectedListId}/items`,
+      if (!itemBeingEdited) {
+        const nextItems = [optimisticItem, ...itemsRef.current];
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      } else {
+        const nextItems = replaceItem(itemsRef.current, itemBeingEdited.id, {
+          ...itemBeingEdited,
+          title: itemTitle.trim(),
+          quantity,
+        });
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      }
+      const data = await requestJson<{ item: Item }>(
+        itemBeingEdited
+          ? `/lists/${listId}/items/${itemBeingEdited.id}`
+          : `/lists/${listId}/items`,
         {
-          method: editingItem ? "PUT" : "POST",
+          method: itemBeingEdited ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: itemTitle, quantity }),
         },
+        itemBeingEdited
+          ? "アイテムを編集できませんでした"
+          : "アイテムを追加できませんでした",
       );
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(
-            response,
-            editingItem
-              ? "アイテムを編集できませんでした"
-              : "アイテムを追加できませんでした",
-          ),
+      if (!itemBeingEdited) {
+        const nextItems = replaceItem(
+          itemsRef.current,
+          optimisticId,
+          data.item,
         );
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      } else {
+        const nextItems = replaceItem(
+          itemsRef.current,
+          itemBeingEdited.id,
+          data.item,
+        );
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      }
       setItemTitle("");
       setQuantity(1);
       setEditingItem(null);
       setIsItemModalOpen(false);
       await loadItems(selectedListId);
     } catch (cause) {
+      if (!itemBeingEdited) {
+        const nextItems = itemsRef.current.filter(
+          (item) => item.id !== optimisticId,
+        );
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+      } else {
+        itemsRef.current = previousItems;
+        setItems(previousItems);
+      }
       setItemError(
         cause instanceof Error
           ? cause.message
@@ -256,47 +354,76 @@ export function Dashboard({
   }
 
   async function toggleItem(itemId: string) {
-    if (busyItemId) return;
-    setBusyItemId(itemId);
+    if (busyItemIds.includes(itemId)) return;
+    const optimistic = toggleItemOptimistically(itemsRef.current, itemId);
+    if (!optimistic.snapshot) return;
+    itemsRef.current = optimistic.items;
+    setItems(optimistic.items);
+    setBusyItemIds((current) => [...current, itemId]);
     setError("");
     try {
-      const response = await fetch(
+      const data = await requestJson<{ item: Item }>(
         `/lists/${selectedListId}/items/${itemId}/toggle`,
         { method: "PATCH" },
+        "アイテムの状態を変更できませんでした",
       );
-      if (!response.ok) throw new Error("アイテムの状態を変更できませんでした");
-      await loadItems(selectedListId);
+      const nextItems = replaceItem(itemsRef.current, itemId, data.item);
+      itemsRef.current = nextItems;
+      setItems(nextItems);
     } catch (cause) {
+      const nextItems = rollbackItemMutation(
+        itemsRef.current,
+        optimistic.snapshot,
+      );
+      itemsRef.current = nextItems;
+      setItems(nextItems);
       setError(
         cause instanceof Error
           ? cause.message
           : "アイテムの状態を変更できませんでした",
       );
     } finally {
-      setBusyItemId(null);
+      setBusyItemIds((current) => current.filter((id) => id !== itemId));
     }
   }
 
   async function deleteItem(item: Item) {
-    if (busyItemId || !window.confirm(`「${item.title}」を削除しますか？`))
+    if (
+      busyItemIds.includes(item.id) ||
+      !window.confirm(`「${item.title}」を削除しますか？`)
+    )
       return;
-    setBusyItemId(item.id);
+    const itemIndex = itemsRef.current.findIndex(
+      (current) => current.id === item.id,
+    );
+    const nextItems = itemsRef.current.filter(
+      (current) => current.id !== item.id,
+    );
+    itemsRef.current = nextItems;
+    setItems(nextItems);
+    setBusyItemIds((current) => [...current, item.id]);
     setError("");
     try {
       const response = await fetch(
         `/lists/${selectedListId}/items/${item.id}`,
         { method: "DELETE" },
       );
-      if (!response.ok) throw new Error("アイテムを削除できませんでした");
-      await loadItems(selectedListId);
+      if (!response.ok)
+        throw new Error(
+          await getRequestError(response, "アイテムを削除できませんでした"),
+        );
     } catch (cause) {
+      const restoredItems = [...itemsRef.current];
+      restoredItems.splice(itemIndex, 0, item);
+      itemsRef.current = restoredItems;
+      setItems(restoredItems);
       setError(
         cause instanceof Error
           ? cause.message
           : "アイテムを削除できませんでした",
       );
     } finally {
-      setBusyItemId(null);
+      setBusyItemIds((current) => current.filter((id) => id !== item.id));
     }
   }
 
@@ -305,6 +432,16 @@ export function Dashboard({
     if (!selectedListId || isSavingList) return;
     setIsSavingList(true);
     setListError("");
+    const previousName = lists.find((list) => list.id === selectedListId)?.name;
+    const nextName = editedListName.trim();
+    setLists((current) =>
+      current.map((list) =>
+        list.id === selectedListId ? { ...list, name: nextName } : list,
+      ),
+    );
+    setListDetails((current) =>
+      current ? { ...current, name: nextName } : current,
+    );
     try {
       const response = await fetch(`/lists/${selectedListId}`, {
         method: "PUT",
@@ -325,6 +462,17 @@ export function Dashboard({
         current ? { ...current, name: data.list.name } : current,
       );
     } catch (cause) {
+      if (previousName !== undefined) {
+        setLists((current) =>
+          current.map((list) =>
+            list.id === selectedListId ? { ...list, name: previousName } : list,
+          ),
+        );
+        setListDetails((current) =>
+          current ? { ...current, name: previousName } : current,
+        );
+        setEditedListName(previousName);
+      }
       setListError(
         cause instanceof Error
           ? cause.message
@@ -402,8 +550,13 @@ export function Dashboard({
       return;
     setIsManagingMember(true);
     setListError("");
+    const leavingListId = selectedListId;
+    const previousLists = lists;
+    setLists((current) => current.filter((list) => list.id !== leavingListId));
+    setSelectedListId("");
+    setIsListModalOpen(false);
     try {
-      const response = await fetch(`/lists/${selectedListId}/membership`, {
+      const response = await fetch(`/lists/${leavingListId}/membership`, {
         method: "DELETE",
       });
       if (!response.ok)
@@ -411,10 +564,11 @@ export function Dashboard({
           await getRequestError(response, "リストから退会できませんでした"),
         );
       localStorage.removeItem(lastListKey);
-      setIsListModalOpen(false);
-      setSelectedListId("");
       await loadLists();
     } catch (cause) {
+      setLists(previousLists);
+      setSelectedListId(leavingListId);
+      setIsListModalOpen(true);
       setListError(
         cause instanceof Error
           ? cause.message
@@ -436,8 +590,13 @@ export function Dashboard({
       return;
     setIsSavingList(true);
     setListError("");
+    const deletingListId = selectedListId;
+    const previousLists = lists;
+    setLists((current) => current.filter((list) => list.id !== deletingListId));
+    setSelectedListId("");
+    setIsListModalOpen(false);
     try {
-      const response = await fetch(`/lists/${selectedListId}`, {
+      const response = await fetch(`/lists/${deletingListId}`, {
         method: "DELETE",
       });
       if (!response.ok)
@@ -445,10 +604,11 @@ export function Dashboard({
           await getRequestError(response, "リストを削除できませんでした"),
         );
       localStorage.removeItem(lastListKey);
-      setIsListModalOpen(false);
-      setSelectedListId("");
       await loadLists();
     } catch (cause) {
+      setLists(previousLists);
+      setSelectedListId(deletingListId);
+      setIsListModalOpen(true);
       setListError(
         cause instanceof Error ? cause.message : "リストを削除できませんでした",
       );
@@ -494,56 +654,17 @@ export function Dashboard({
         />
       )}
       <div className="workspace">
-        <aside className={isSidebarOpen ? "sidebar open" : "sidebar"}>
-          <div className="sidebar-header">
-            <div className="section-heading">
-              <h2>リスト</h2>
-              <span>{lists.length}</span>
-            </div>
-            <button
-              className="sidebar-close"
-              onClick={() => setIsSidebarOpen(false)}
-              aria-label="リストを閉じる"
-            >
-              ×
-            </button>
-          </div>
-          <div className="list-links">
-            {lists.map((list) => (
-              <button
-                className={
-                  list.id === selectedListId ? "list-link active" : "list-link"
-                }
-                key={list.id}
-                onClick={() => selectList(list.id)}
-              >
-                {list.name}
-              </button>
-            ))}
-          </div>
-          <form className="stack-form" onSubmit={createList}>
-            <label htmlFor="list-name">新しいリスト</label>
-            <div className="inline-form">
-              <input
-                id="list-name"
-                value={listName}
-                onChange={(event) => setListName(event.target.value)}
-                placeholder="例: 今週の買い物"
-                maxLength={100}
-                required
-                disabled={isCreatingList}
-              />
-              <button
-                className="icon-button"
-                aria-label="リストを作成"
-                title="リストを作成"
-                disabled={isCreatingList}
-              >
-                {isCreatingList ? "…" : "+"}
-              </button>
-            </div>
-          </form>
-        </aside>
+        <Sidebar
+          lists={lists}
+          selectedListId={selectedListId}
+          listName={listName}
+          isSidebarOpen={isSidebarOpen}
+          isCreatingList={isCreatingList}
+          onClose={() => setIsSidebarOpen(false)}
+          onSelectList={selectList}
+          onListNameChange={setListName}
+          onCreateList={createList}
+        />
         <section className="content-panel">
           <div className="content-heading">
             <div>
@@ -581,57 +702,16 @@ export function Dashboard({
             )}
           </div>
           {selectedListId ? (
-            <div className="items-list">
-              {items.length ? (
-                items.map((item) => (
-                  <article className="item-row" key={item.id}>
-                    <button
-                      className={item.is_completed ? "check checked" : "check"}
-                      onClick={() => toggleItem(item.id)}
-                      disabled={busyItemId !== null}
-                      aria-label={
-                        item.is_completed ? "未完了に戻す" : "完了にする"
-                      }
-                    >
-                      {item.is_completed ? "✓" : ""}
-                    </button>
-                    <div className="item-copy">
-                      <strong>{item.title}</strong>
-                      <span>数量 {item.quantity}</span>
-                    </div>
-                    <button
-                      className="utility-button"
-                      onClick={() => openItemModal(item)}
-                      disabled={busyItemId !== null}
-                      aria-label="アイテムを編集"
-                      title="アイテムを編集"
-                    >
-                      <Edit3 size={16} />
-                    </button>
-                    {!item.is_completed && (
-                      <button
-                        className="delete-button"
-                        onClick={() => deleteItem(item)}
-                        disabled={busyItemId !== null}
-                        aria-label="削除"
-                        title="削除"
-                      >
-                        <Trash2 size={17} />
-                      </button>
-                    )}
-                  </article>
-                ))
-              ) : (
-                <div className="empty-state">
-                  <span>{showCompleted ? "○" : "＋"}</span>
-                  <p>
-                    {showCompleted
-                      ? "完了済みのアイテムはありません"
-                      : "右下の＋から買い物を追加しましょう"}
-                  </p>
-                </div>
+            <ItemList
+              items={items.filter(
+                (item) => item.is_completed === showCompleted,
               )}
-            </div>
+              showCompleted={showCompleted}
+              busyItemIds={busyItemIds}
+              onToggle={toggleItem}
+              onEdit={openItemModal}
+              onDelete={deleteItem}
+            />
           ) : (
             <div className="empty-state large">
               <span>＋</span>
@@ -656,230 +736,38 @@ export function Dashboard({
         </button>
       )}
       {isItemModalOpen && (
-        <div className="modal-backdrop" onMouseDown={closeItemModal}>
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="item-modal-title"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="modal-heading">
-              <h2 id="item-modal-title">
-                {editingItem ? "アイテムを編集" : "アイテムを追加"}
-              </h2>
-              <button
-                className="sidebar-close"
-                onClick={closeItemModal}
-                disabled={isCreatingItem}
-                aria-label="閉じる"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <form className="modal-form" onSubmit={saveItem}>
-              <label htmlFor="item-title">商品名</label>
-              <input
-                ref={itemTitleInput}
-                id="item-title"
-                value={itemTitle}
-                onChange={(event) => setItemTitle(event.target.value)}
-                placeholder="例: 牛乳"
-                maxLength={255}
-                required
-                disabled={isCreatingItem}
-              />
-              <label htmlFor="item-quantity">数量</label>
-              <input
-                id="item-quantity"
-                type="number"
-                min={1}
-                max={999}
-                value={quantity}
-                onChange={(event) => setQuantity(Number(event.target.value))}
-                required
-                disabled={isCreatingItem}
-              />
-              {itemError && (
-                <p className="error-message" role="alert">
-                  {itemError}
-                </p>
-              )}
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="quiet-button"
-                  onClick={closeItemModal}
-                  disabled={isCreatingItem}
-                >
-                  キャンセル
-                </button>
-                <button className="primary-button" disabled={isCreatingItem}>
-                  {isCreatingItem ? "保存中…" : editingItem ? "保存" : "追加"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
+        <ItemModal
+          editingItem={editingItem}
+          itemTitle={itemTitle}
+          quantity={quantity}
+          itemError={itemError}
+          isCreatingItem={isCreatingItem}
+          itemTitleInput={itemTitleInput}
+          onClose={closeItemModal}
+          onSubmit={saveItem}
+          onTitleChange={setItemTitle}
+          onQuantityChange={setQuantity}
+        />
       )}
       {isListModalOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={() =>
-            !isSavingList && !isManagingMember && setIsListModalOpen(false)
-          }
-        >
-          <section
-            className="modal list-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="list-modal-title"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="modal-heading">
-              <div>
-                <p className="eyebrow">LIST SETTINGS</p>
-                <h2 id="list-modal-title">リストを管理</h2>
-              </div>
-              <button
-                className="sidebar-close"
-                onClick={() => setIsListModalOpen(false)}
-                disabled={isSavingList || isManagingMember}
-                aria-label="閉じる"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            {listDetails ? (
-              <>
-                <section className="settings-section">
-                  <h3>リスト名</h3>
-                  {listDetails.created_by === userId ? (
-                    <form
-                      className="inline-form settings-form"
-                      onSubmit={updateList}
-                    >
-                      <input
-                        value={editedListName}
-                        onChange={(event) =>
-                          setEditedListName(event.target.value)
-                        }
-                        maxLength={100}
-                        required
-                        disabled={isSavingList}
-                      />
-                      <button
-                        className="primary-button"
-                        disabled={isSavingList}
-                      >
-                        {isSavingList ? "保存中…" : "保存"}
-                      </button>
-                    </form>
-                  ) : (
-                    <p>{listDetails.name}</p>
-                  )}
-                </section>
-                <section className="settings-section">
-                  <div className="settings-heading">
-                    <h3>
-                      <Users size={18} /> メンバー
-                    </h3>
-                    <span>{members.length}人</span>
-                  </div>
-                  {listDetails.created_by === userId && (
-                    <form className="member-form" onSubmit={addMember}>
-                      <label htmlFor="member-user-id">ユーザーID</label>
-                      <div className="inline-form">
-                        <input
-                          id="member-user-id"
-                          value={memberUserId}
-                          onChange={(event) =>
-                            setMemberUserId(event.target.value)
-                          }
-                          placeholder="Supabase UUID"
-                          required
-                          disabled={isManagingMember}
-                        />
-                        <button
-                          className="primary-button"
-                          disabled={isManagingMember}
-                        >
-                          {isManagingMember ? "追加中…" : "追加"}
-                        </button>
-                      </div>
-                    </form>
-                  )}
-                  <div className="members-list">
-                    {members.map((member) => (
-                      <div className="member-row" key={member.user_id}>
-                        <div>
-                          <strong>
-                            {member.users?.display_name || "名前未設定"}
-                          </strong>
-                          <span>
-                            {member.user_id === listDetails.created_by
-                              ? "作成者"
-                              : member.user_id === userId
-                                ? "あなた"
-                                : member.user_id}
-                          </span>
-                        </div>
-                        {listDetails.created_by === userId &&
-                          member.user_id !== listDetails.created_by && (
-                            <button
-                              className="utility-button danger"
-                              onClick={() => removeMember(member.user_id)}
-                              disabled={isManagingMember}
-                              aria-label="メンバーを除外"
-                              title="メンバーを除外"
-                            >
-                              <UserMinus size={17} />
-                            </button>
-                          )}
-                      </div>
-                    ))}
-                  </div>
-                </section>
-                <section className="settings-section danger-zone">
-                  {listDetails.created_by === userId ? (
-                    <>
-                      <h3>リストを削除</h3>
-                      <p>リスト内のアイテムとメンバー情報も削除されます。</p>
-                      <button
-                        className="danger-button"
-                        onClick={deleteList}
-                        disabled={isSavingList}
-                      >
-                        リストを削除
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <h3>このリストから退会</h3>
-                      <p>
-                        退会後は、メンバーに追加されるまでリストにアクセスできません。
-                      </p>
-                      <button
-                        className="danger-button"
-                        onClick={leaveList}
-                        disabled={isManagingMember}
-                      >
-                        リストから退会
-                      </button>
-                    </>
-                  )}
-                </section>
-              </>
-            ) : (
-              <p className="modal-loading">リスト情報を読み込んでいます…</p>
-            )}
-            {listError && (
-              <p className="error-message" role="alert">
-                {listError}
-              </p>
-            )}
-          </section>
-        </div>
+        <ListSettingsModal
+          userId={userId}
+          listDetails={listDetails}
+          members={members}
+          editedListName={editedListName}
+          memberUserId={memberUserId}
+          listError={listError}
+          isSavingList={isSavingList}
+          isManagingMember={isManagingMember}
+          onClose={() => setIsListModalOpen(false)}
+          onUpdateList={updateList}
+          onEditedListNameChange={setEditedListName}
+          onAddMember={addMember}
+          onMemberUserIdChange={setMemberUserId}
+          onRemoveMember={removeMember}
+          onLeaveList={leaveList}
+          onDeleteList={deleteList}
+        />
       )}
     </main>
   );

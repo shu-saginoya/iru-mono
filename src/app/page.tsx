@@ -1,6 +1,6 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { Dashboard } from "./dashboard";
-import { LoginButton } from "./login-button";
+import { LoginButton } from "@/features/auth/components/login-button";
+import { Dashboard } from "@/features/dashboard/components/dashboard";
 
 export default async function Home() {
   const supabase = await createSupabaseServerClient();

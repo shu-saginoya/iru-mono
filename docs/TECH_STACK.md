@@ -21,7 +21,7 @@
 ## 3. 初回リリースで採用しないもの
 
 - Prisma: Supabase Client と役割が重なるため使わない
-- Socket.io / Supabase Realtime: 画面再読み込みで最新状態を取得し、リアルタイムは後回しにする
+- Socket.io / Supabase Realtime: 画面内の状態更新で対応し、他ユーザーのリアルタイム同期は後回しにする
 - Zustand: 標準の React state で足りるため使わない
 - OpenAPI: API が安定してから検討する
 - 別バックエンドサーバー: Next.js Route Handler に集約する
@@ -56,7 +56,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 3. リスト作成・一覧・更新
 4. RLS とメンバー追加・除外
 5. アイテム CRUD と完了切り替え
-6. 画面の再読み込みによる状態更新
+6. 楽観的UIと画面内の状態更新
 7. 後から必要性を確認して Realtime、タグ、招待、削除ジョブを追加
 
 ## 8. AI エージェント向け開発ルール

@@ -13,6 +13,14 @@ const querySchema = z.object({
 });
 type Context = { params: Promise<{ listId: string }> };
 
+async function readJson(request: Request) {
+  try {
+    return await request.json();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function GET(request: Request, { params }: Context) {
   const context = await getAuthContext();
   if (!context) return unauthorized();
@@ -73,7 +81,7 @@ export async function POST(request: Request, { params }: Context) {
       { error: "Access denied", code: "FORBIDDEN" },
       { status: 403 },
     );
-  const parsed = itemSchema.safeParse(await request.json());
+  const parsed = itemSchema.safeParse(await readJson(request));
   if (!parsed.success)
     return Response.json(
       {

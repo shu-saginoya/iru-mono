@@ -60,6 +60,31 @@ describe("/lists/:listId/items", () => {
     });
   });
 
+  it("rejects malformed JSON before writing", async () => {
+    mockedGetAuthContext.mockResolvedValue({
+      supabase: {} as never,
+      user: { id: "user-1" } as never,
+    });
+    mockedGetListAccess.mockResolvedValue({
+      supabase: {} as never,
+      list: {} as never,
+      isOwner: true,
+    });
+
+    const response = await POST(
+      new Request("http://localhost/lists/list-1/items", {
+        method: "POST",
+        body: "not-json",
+      }),
+      context,
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+  });
+
   it("creates a validated item for a list member", async () => {
     const item = {
       id: "item-1",
