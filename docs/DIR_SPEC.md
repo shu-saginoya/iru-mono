@@ -7,15 +7,15 @@ src/
 ├── app/                  # ページ、レイアウト、Route Handler
 │   ├── auth/             # OAuth callback、logout、me
 │   ├── lists/            # リスト、メンバー、アイテムの API
-│   ├── components/       # 共通 UI
-│   ├── features/         # 機能単位の UI とロジック
-│   ├── lib/              # Supabase、API 共通処理
 │   ├── globals.css
 │   └── layout.tsx
+├── components/       # 共通 UI
+├── features/         # 機能単位の UI とロジック
+├── lib/              # Supabase、API 共通処理
 └── proxy.ts              # リクエスト境界の処理
 ```
 
-### 配置ルール
+## 配置ルール
 
 - Route Handler は `app/**/route.ts` に置く
 - 画面固有の UI は `features/`、複数機能で使う UI は `components/` に置く
