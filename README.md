@@ -1,10 +1,8 @@
 # IRU MONO
 
-共有買い物リストアプリです。家族などで必要なものを登録して買い物の時に一覧で確認できます。
+複数人で買い物リストを共有する Web アプリです。
 
 ## 概要
-
-IRU MONO は、複数人で買い物リストを共有するためのシンプルな Web アプリです。
 
 主な機能:
 
@@ -12,9 +10,11 @@ IRU MONO は、複数人で買い物リストを共有するためのシンプ�
 - リストの作成と一覧表示
 - リストへのメンバー追加
 - アイテムの追加・編集・完了切り替え・削除
-- 画面再読み込み時に最新状態を取得
+- 画面内の状態更新
 
-## 仕様と設計書
+## ドキュメント
+
+要件・設計の責務を分けています。機能要件は仕様書、API は API仕様書、DB は DB仕様書を確認してください。
 
 - [仕様書](docs/SPEC.md)
 - [API仕様書](docs/API_SPEC.md)
@@ -32,7 +32,7 @@ IRU MONO は、複数人で買い物リストを共有するためのシンプ�
 pnpm install
 ```
 
-`.env.example` を参考に `.env.local` を作成します（詳細は「7. 環境変数」を参照）。
+`.env.local` を作成します。必要な変数は [技術構成](docs/TECH_STACK.md) を参照してください。
 
 開発サーバーを起動します。
 
@@ -46,26 +46,7 @@ pnpm dev
 
 ## 環境変数
 
-### 現在使用している変数
-
-| 変数名                          | 用途                                                       |
-| ------------------------------- | ---------------------------------------------------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`      | Supabase プロジェクトの URL                                |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase クライアント（ブラウザ・サーバー共通）の anon key |
-
-```env
-NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-### 未使用の変数（将来用）
-
-以下は `.env.example` に記載していますが、現状のコードからは参照されていません。RLS をバイパスする管理者操作など、`SUPABASE_SERVICE_ROLE_KEY` が必要な機能を実装するまでは設定不要です。誤って公開しないよう、使う予定がない場合はデプロイ先にも登録しないでください。
-
-| 変数名                      | 想定用途                                                                       |
-| --------------------------- | ------------------------------------------------------------------------------ |
-| `SUPABASE_SERVICE_ROLE_KEY` | RLS を無視するサーバー専用の管理者キー（未実装）                               |
-| `NEXT_PUBLIC_APP_URL`       | アプリの公開 URL（未参照。リダイレクト先は `window.location.origin` から生成） |
+現在の必須変数は `NEXT_PUBLIC_SUPABASE_URL` と `NEXT_PUBLIC_SUPABASE_ANON_KEY` です。定義と用途は [技術構成](docs/TECH_STACK.md) を参照してください。
 
 ## Supabase 設定
 
@@ -87,18 +68,11 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ### DB 作成
 
-[docs/DB_SCHEMA.md](docs/DB_SCHEMA.md) の SQL を実行して、以下のテーブルを作成します。
-
-- public.users
-- public.lists
-- public.list_members
-- public.items
-
-また、RLS を有効化し、各テーブルに権限ポリシーを設定してください。
+[DB仕様書](docs/DB_SCHEMA.md) の SQL と RLS 方針を適用してください。
 
 ## デプロイ
 
-Vercel でホスティングしています。GitHub リポジトリを Vercel にインポートし、Project Settings で「7. 環境変数」の内容を設定すればデプロイできます。ビルドコマンドは `pnpm build` です。
+Vercel にデプロイします。Project Settings に環境変数を設定し、ビルドコマンド `pnpm build` を実行します。
 
 Google ログイン後に意図しない URL へリダイレクトされる場合は、Supabase の Site URL / Redirect URLs と、Google Cloud Console のリダイレクト URI（Supabase の callback URL）の設定を確認してください。
 
@@ -120,17 +94,4 @@ pnpm test    # Vitest
 - アイテムを追加・完了・削除できる
 - 画面再読み込み後に状態が維持される
 
-## 今後の拡張候補
-
-- 招待コードと招待リンク
-- タグやカテゴリ
-- 検索とフィルタ
-- 完了アイテムの自動削除
-- Realtime 同期
-
-## セキュリティ上の注意点
-
-- Supabase のサービスロールキーはブラウザに直接置かない
-- すべての API でリスト所属確認を行う
-- 認可は API 側と RLS の両方で守る
-- 本番では Google OAuth と Supabase のリダイレクト URL 設定を必ず確認する
+今後の拡張候補とセキュリティ要件は [プロダクト仕様](docs/SPEC.md) に集約しています。

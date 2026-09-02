@@ -1,8 +1,10 @@
-# API 仕様書（MVP）
+# API仕様（MVP）
+
+エンドポイントと入出力の正本。機能の目的と対象外は [プロダクト仕様](SPEC.md)、データ構造は [DBスキーマ](DB_SCHEMA.md) を参照する。
 
 ## 1. 共通方針
 
-認証とセッション管理は Supabase Auth に委譲します。Google OAuth の開始は Supabase Client を使い、アプリ API にログイン・パスワード登録処理は実装しません。
+認証とセッション管理は Supabase Auth に委譲する。アプリ API にログイン・パスワード登録処理は実装しない。
 
 - 認証済みユーザーは Supabase SSR のセッションから特定する
 - `listId` は URL から受け取るが、アクセス権は必ず `ListMember` で確認する
@@ -89,11 +91,8 @@ await supabase.auth.signInWithOAuth({
 { "error": "Error message", "code": "ERROR_CODE" }
 ```
 
-## 7. 後から追加する API
+## 7. 対象外
 
-- 招待コード・招待リンク
-- 検索、タグ、カテゴリ、優先度
-- Supabase Realtime 購読
-- 完了アイテム自動削除
+追加候補は [プロダクト仕様](SPEC.md) の「対象外」を参照する。この文書には実装済み MVP の API だけを記載する。
 
-最終更新: 2026年8月18日
+最終更新: 2026年9月2日

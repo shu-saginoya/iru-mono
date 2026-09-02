@@ -1,4 +1,6 @@
-# データベーススキーマ設計（MVP）
+# データベーススキーマ（MVP）
+
+テーブル、制約、RLS の正本。機能要件は [プロダクト仕様](SPEC.md)、API との対応は [API仕様](API_SPEC.md) を参照する。
 
 ## 1. 方針
 
@@ -117,7 +119,7 @@ create index items_created_at_idx on public.items(created_at);
 - アイテムの作成・更新・完了切り替えは全メンバーが行える
 - サービスロールキーはサーバー専用にする
 
-## 6. 後から追加するもの
+## 6. 将来の拡張
 
 - tags、item_tags
 - 招待情報を管理するテーブル
@@ -125,4 +127,6 @@ create index items_created_at_idx on public.items(created_at);
 - Realtime 用の詳細設計
 - 完了アイテムの自動削除ジョブ
 
-最終更新: 2026年8月18日
+詳細な機能の対象外は [プロダクト仕様](SPEC.md) に集約する。
+
+最終更新: 2026年9月2日
