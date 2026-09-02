@@ -1,4 +1,6 @@
-# テスト方針
+# テスト方針（MVP）
+
+テスト対象と実行手順を定義する。機能要件は [プロダクト仕様](SPEC.md)、API の期待値は [API仕様](API_SPEC.md) を正本とする。
 
 ## 1. 目的
 
@@ -30,12 +32,12 @@ pnpm build
 
 ## 3. 現在の自動テスト
 
-テストランナーはVitestです。設定は [vitest.config.mts](/vitest.config.mts) にあり、`src/**/*.test.ts`を対象にします。
+テストランナーは Vitest です。設定は [vitest.config.mts](../vitest.config.mts) にあり、`src/**/*.test.ts` を対象にします。
 
-| テストファイル                                                                           | 確認内容                                                                                                                                                  |
-| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [items/route.test.ts](/src/app/lists/[listId]/items/route.test.ts)                       | 未認証のアイテム取得が`401 UNAUTHENTICATED`になること、無効なアイテム入力が`422 VALIDATION_ERROR`になること、所属メンバーが有効なアイテムを作成できること |
-| [members/[userId]/route.test.ts](/src/app/lists/[listId]/members/[userId]/route.test.ts) | 作成者自身のメンバー除外が`409 OWNER_CANNOT_BE_REMOVED`になり、DB削除を実行しないこと                                                                     |
+| テストファイル                                                                             | 確認内容                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [items/route.test.ts](../src/app/lists/[listId]/items/route.test.ts)                       | 未認証のアイテム取得が `401 UNAUTHENTICATED` になること、無効なアイテム入力が `422 VALIDATION_ERROR` になること、所属メンバーが有効なアイテムを作成できること |
+| [members/[userId]/route.test.ts](../src/app/lists/[listId]/members/[userId]/route.test.ts) | 作成者自身のメンバー除外が `409 OWNER_CANNOT_BE_REMOVED` になり、DB削除を実行しないこと                                                                       |
 
 これらのテストでは`@/lib/api/auth`をモックします。Supabaseへ接続しないため、高速にRoute Handlerの入力検証・HTTP応答・アプリ側認可ルールを確認できます。
 
@@ -106,24 +108,22 @@ E2Eテストは未導入です。導入時はPlaywrightを使い、Google OAuth�
 4. 未完了へ戻し、削除確認を経て削除する
 5. SP表示でサイドバーを開き、別のリストへ切り替える
 
-## 7. 依存関係の問題
+## 7. 依存関係の復旧
 
-`pnpm test`や`pnpm dev`で、VitestまたはNext.jsのモジュール解決エラーが出る場合は、依存関係が途中までしか展開されていない可能性があります。
+`pnpm test` または `pnpm dev` でモジュール解決エラーが出た場合は、依存関係を再構築する。
 
-まずNode.jsのバージョンを確認します。このプロジェクトはVoltaでNode.js `24.13.0`を固定しています。
+Node.js のバージョンは Volta で `24.13.0` に固定している。
 
 ```powershell
 node -v
 pnpm -v
 ```
 
-次に、ロックファイルを変更せず依存関係を再構築します。
+ロックファイルを変更せず依存関係を再構築する。
 
 ```powershell
 pnpm install --force
 ```
-
-Vitestの設定ファイルはESMとして読み込むため、拡張子は`vitest.config.mts`を維持します。
 
 再構築後に、テスト・型チェック・ビルドを順に実行します。
 
@@ -133,4 +133,4 @@ pnpm exec tsc --noEmit
 pnpm build
 ```
 
-最終更新: 2026年8月19日
+最終更新: 2026年9月2日
