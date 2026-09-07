@@ -162,13 +162,6 @@ export function Dashboard({
     setEditedListName(data.list.name);
   }
 
-  async function loadInvitations() {
-    const response = await fetch("/invitations");
-    if (!response.ok) return;
-    const data = (await response.json()) as { invitations: Invitation[] };
-    setInvitations(data.invitations);
-  }
-
   useEffect(() => {
     let active = true;
 
@@ -188,7 +181,18 @@ export function Dashboard({
   }, [loadLists]);
 
   useEffect(() => {
-    void loadInvitations();
+    let active = true;
+
+    void (async () => {
+      const response = await fetch("/invitations");
+      if (!response.ok || !active) return;
+      const data = (await response.json()) as { invitations: Invitation[] };
+      if (active) setInvitations(data.invitations);
+    })();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
