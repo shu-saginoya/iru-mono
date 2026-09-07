@@ -133,6 +133,9 @@ create index items_list_id_idx on public.items(list_id);
 create index items_created_at_idx on public.items(created_at);
 create index list_invitations_email_idx on public.list_invitations(lower(email));
 create index list_invitations_list_id_idx on public.list_invitations(list_id);
+create unique index list_invitations_pending_unique_idx
+  on public.list_invitations(list_id, lower(email))
+  where accepted_at is null;
 ```
 
 ## 5. RLS 方針

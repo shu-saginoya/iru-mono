@@ -53,7 +53,7 @@ export async function POST(request: Request, { params }: Context) {
     );
   if (error)
     return Response.json(
-      { error: error.message, code: "MEMBER_CREATE_FAILED" },
+      { error: error.message, code: "INVITATION_CREATE_FAILED" },
       { status: 500 },
     );
   const appUrl =

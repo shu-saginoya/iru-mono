@@ -13,7 +13,7 @@ export async function GET(_request: Request, { params }: Context) {
     invitation_token_hash: createHash("sha256").update(token).digest("hex"),
     accepting_user_id: context.user.id,
   });
-  if (error?.message.includes("INVITATION_INVALID")) {
+  if (error?.code === "P0002") {
     return Response.json(
       { error: "Invitation is invalid or expired", code: "INVITATION_INVALID" },
       { status: 410 },
