@@ -1,6 +1,6 @@
 "use client";
 
-import { UserMinus, Users, X } from "lucide-react";
+import { Copy, UserMinus, Users, X } from "lucide-react";
 type ListDetails = { id: string; name: string; created_by: string };
 type Member = {
   user_id: string;
@@ -17,15 +17,18 @@ type Props = {
   listDetails: ListDetails | null;
   members: Member[];
   editedListName: string;
-  memberUserId: string;
+  memberEmail: string;
   listError: string;
+  inviteMessage: string;
+  invitationUrl: string;
   isSavingList: boolean;
   isManagingMember: boolean;
   onClose: () => void;
   onUpdateList: (event: React.FormEvent<HTMLFormElement>) => void;
   onEditedListNameChange: (value: string) => void;
   onAddMember: (event: React.FormEvent<HTMLFormElement>) => void;
-  onMemberUserIdChange: (value: string) => void;
+  onMemberEmailChange: (value: string) => void;
+  onCopyInvitation: () => Promise<void>;
   onRemoveMember: (memberId: string) => void;
   onLeaveList: () => void;
   onDeleteList: () => void;
@@ -36,15 +39,18 @@ export function ListSettingsModal({
   listDetails,
   members,
   editedListName,
-  memberUserId,
+  memberEmail,
   listError,
+  inviteMessage,
+  invitationUrl,
   isSavingList,
   isManagingMember,
   onClose,
   onUpdateList,
   onEditedListNameChange,
   onAddMember,
-  onMemberUserIdChange,
+  onMemberEmailChange,
+  onCopyInvitation,
   onRemoveMember,
   onLeaveList,
   onDeleteList,
@@ -110,15 +116,16 @@ export function ListSettingsModal({
               </div>
               {isOwner && (
                 <form className="member-form" onSubmit={onAddMember}>
-                  <label htmlFor="member-user-id">ユーザーID</label>
+                  <label htmlFor="member-email">メールアドレス</label>
                   <div className="inline-form">
                     <input
-                      id="member-user-id"
-                      value={memberUserId}
+                      id="member-email"
+                      type="email"
+                      value={memberEmail}
                       onChange={(event) =>
-                        onMemberUserIdChange(event.target.value)
+                        onMemberEmailChange(event.target.value)
                       }
-                      placeholder="Supabase UUID"
+                      placeholder="invitee@example.com"
                       required
                       disabled={isManagingMember}
                     />
@@ -126,9 +133,30 @@ export function ListSettingsModal({
                       className="primary-button"
                       disabled={isManagingMember}
                     >
-                      {isManagingMember ? "追加中…" : "追加"}
+                      {isManagingMember ? "送信中…" : "招待"}
                     </button>
                   </div>
+                  {inviteMessage && (
+                    <p className="invite-message">{inviteMessage}</p>
+                  )}
+                  {invitationUrl && (
+                    <div className="invitation-link">
+                      <input
+                        value={invitationUrl}
+                        readOnly
+                        aria-label="招待リンク"
+                      />
+                      <button
+                        className="utility-button"
+                        type="button"
+                        onClick={() => void onCopyInvitation()}
+                        aria-label="招待リンクをコピー"
+                        title="招待リンクをコピー"
+                      >
+                        <Copy size={17} />
+                      </button>
+                    </div>
+                  )}
                 </form>
               )}
               <div className="members-list">

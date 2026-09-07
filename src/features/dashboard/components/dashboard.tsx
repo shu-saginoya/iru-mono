@@ -24,6 +24,13 @@ type Member = {
     avatar_url: string | null;
   } | null;
 };
+type Invitation = {
+  id: string;
+  email: string;
+  expiresAt: string;
+  createdAt: string;
+  list: { name: string } | null;
+};
 
 async function getRequestError(response: Response, fallback: string) {
   try {
@@ -86,7 +93,10 @@ export function Dashboard({
   const [listDetails, setListDetails] = useState<ListDetails | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [editedListName, setEditedListName] = useState("");
-  const [memberUserId, setMemberUserId] = useState("");
+  const [memberEmail, setMemberEmail] = useState("");
+  const [inviteMessage, setInviteMessage] = useState("");
+  const [invitationUrl, setInvitationUrl] = useState("");
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
   const itemsRef = useRef(items);
   const itemsRequestId = useRef(0);
   const itemTitleInput = useRef<HTMLInputElement>(null);
@@ -169,6 +179,21 @@ export function Dashboard({
       active = false;
     };
   }, [loadLists]);
+
+  useEffect(() => {
+    let active = true;
+
+    void (async () => {
+      const response = await fetch("/invitations");
+      if (!response.ok || !active) return;
+      const data = (await response.json()) as { invitations: Invitation[] };
+      if (active) setInvitations(data.invitations);
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -488,26 +513,39 @@ export function Dashboard({
     if (!selectedListId || isManagingMember) return;
     setIsManagingMember(true);
     setListError("");
+    setInviteMessage("");
     try {
       const response = await fetch(`/lists/${selectedListId}/members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: memberUserId }),
+        body: JSON.stringify({ email: memberEmail }),
       });
       if (!response.ok)
         throw new Error(
-          await getRequestError(response, "メンバーを追加できませんでした"),
+          await getRequestError(response, "招待を送信できませんでした"),
         );
-      setMemberUserId("");
-      await loadListDetails(selectedListId);
+      const data = (await response.json()) as {
+        invitation: { url: string };
+      };
+      setMemberEmail("");
+      setInvitationUrl(data.invitation.url);
+      setInviteMessage("招待リンクを発行しました");
     } catch (cause) {
       setListError(
-        cause instanceof Error
-          ? cause.message
-          : "メンバーを追加できませんでした",
+        cause instanceof Error ? cause.message : "招待を送信できませんでした",
       );
     } finally {
       setIsManagingMember(false);
+    }
+  }
+
+  async function copyInvitation() {
+    if (!invitationUrl) return;
+    try {
+      await navigator.clipboard.writeText(invitationUrl);
+      setInviteMessage("招待リンクをコピーしました");
+    } catch {
+      setListError("招待リンクをコピーできませんでした");
     }
   }
 
@@ -666,6 +704,19 @@ export function Dashboard({
           onCreateList={createList}
         />
         <section className="content-panel">
+          {invitations.length > 0 && (
+            <section className="invitation-notice" aria-label="招待">
+              <div>
+                <strong>リストへの招待があります</strong>
+                {invitations.map((invitation) => (
+                  <p key={invitation.id}>
+                    {invitation.list?.name ?? "リスト"} に招待されています。
+                    共有された招待リンクを開いて承認してください。
+                  </p>
+                ))}
+              </div>
+            </section>
+          )}
           <div className="content-heading">
             <div>
               <p className="eyebrow">YOUR LIST</p>
@@ -755,15 +806,18 @@ export function Dashboard({
           listDetails={listDetails}
           members={members}
           editedListName={editedListName}
-          memberUserId={memberUserId}
+          memberEmail={memberEmail}
           listError={listError}
+          inviteMessage={inviteMessage}
+          invitationUrl={invitationUrl}
           isSavingList={isSavingList}
           isManagingMember={isManagingMember}
           onClose={() => setIsListModalOpen(false)}
           onUpdateList={updateList}
           onEditedListNameChange={setEditedListName}
           onAddMember={addMember}
-          onMemberUserIdChange={setMemberUserId}
+          onMemberEmailChange={setMemberEmail}
+          onCopyInvitation={copyInvitation}
           onRemoveMember={removeMember}
           onLeaveList={leaveList}
           onDeleteList={deleteList}

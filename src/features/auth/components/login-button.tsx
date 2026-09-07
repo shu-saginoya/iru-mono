@@ -2,13 +2,20 @@
 
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-export function LoginButton() {
+export function LoginButton({
+  invitationToken,
+}: {
+  invitationToken?: string;
+} = {}) {
   async function signIn() {
     const supabase = createSupabaseBrowserClient();
+    const callbackUrl = new URL("/auth/callback", window.location.origin);
+    if (invitationToken)
+      callbackUrl.searchParams.set("invitation", invitationToken);
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: callbackUrl.toString(),
       },
     });
   }

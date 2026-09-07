@@ -37,17 +37,25 @@ await supabase.auth.signInWithOAuth({
 | GET    | `/lists/:listId`                 | リストとメンバー取得         |
 | PUT    | `/lists/:listId`                 | リスト名変更                 |
 | DELETE | `/lists/:listId`                 | 作成者がリスト削除           |
-| POST   | `/lists/:listId/members`         | 作成者がユーザー追加         |
+| POST   | `/lists/:listId/members`         | 作成者が招待リンクを発行     |
 | DELETE | `/lists/:listId/members/:userId` | 作成者がメンバー除外         |
 | DELETE | `/lists/:listId/membership`      | 自分が退会                   |
+| GET    | `/invitations`                   | 自分宛ての未承認招待取得     |
+| GET    | `/invitations/:token`            | 招待リンクを承認             |
 
 `GET /lists` は所属リストを `updated_at` の降順で返す。`updated_at` はリスト自身の作成・名前変更時に更新し、アイテムの変更では更新しない。
 
-`POST /lists/:listId/members` の初回リクエスト:
+`POST /lists/:listId/members` のリクエスト:
 
 ```json
-{ "userId": "supabase-user-uuid" }
+{ "email": "invitee@example.com" }
 ```
+
+レスポンスには招待ID、有効期限、共有用の招待リンクを含める。アプリはメールを送信しない。
+
+`GET /invitations` はログイン中のメールアドレスに一致する未承認・有効期限内の招待だけを返す。
+
+`GET /invitations/:token` はログイン中のユーザーのメールアドレスと招待先が一致する場合だけメンバー登録し、招待を承認済みにする。未ログインの場合はログイン画面へ遷移し、ログイン後に元の招待を継続する。
 
 ## 4. アイテム
 

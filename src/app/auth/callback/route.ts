@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
+  const invitationToken = requestUrl.searchParams.get("invitation");
 
   if (code) {
     const supabase = await createSupabaseServerClient();
@@ -20,5 +21,8 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.redirect(new URL("/", requestUrl.origin));
+  const redirectPath = invitationToken
+    ? `/invitations/${encodeURIComponent(invitationToken)}`
+    : "/";
+  return NextResponse.redirect(new URL(redirectPath, requestUrl.origin));
 }
