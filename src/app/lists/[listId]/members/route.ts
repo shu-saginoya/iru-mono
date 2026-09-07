@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { getAuthContext, getListAccess, unauthorized } from "@/lib/api/auth";
+import { createInvitationToken } from "@/lib/api/invitations";
 
-const memberSchema = z.object({ userId: z.string().uuid() });
+const memberSchema = z.object({ email: z.string().trim().email().max(320) });
 type Context = { params: Promise<{ listId: string }> };
 
 export async function POST(request: Request, { params }: Context) {
@@ -30,14 +31,24 @@ export async function POST(request: Request, { params }: Context) {
       },
       { status: 422 },
     );
-  const { data: member, error } = await context.supabase
-    .from("list_members")
-    .insert({ list_id: listId, user_id: parsed.data.userId })
+  const { token, tokenHash } = createInvitationToken();
+  const { data: invitation, error } = await context.supabase
+    .from("list_invitations")
+    .insert({
+      list_id: listId,
+      invited_by: context.user.id,
+      email: parsed.data.email.toLowerCase(),
+      token_hash: tokenHash,
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    })
     .select()
     .single();
   if (error?.code === "23505")
     return Response.json(
-      { error: "User is already a member", code: "MEMBER_ALREADY_EXISTS" },
+      {
+        error: "An invitation is already pending",
+        code: "INVITATION_ALREADY_EXISTS",
+      },
       { status: 409 },
     );
   if (error)
@@ -45,5 +56,18 @@ export async function POST(request: Request, { params }: Context) {
       { error: error.message, code: "MEMBER_CREATE_FAILED" },
       { status: 500 },
     );
-  return Response.json({ member }, { status: 201 });
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL?.trim() || new URL(request.url).origin;
+  const invitationUrl = new URL(`/invitations/${token}`, appUrl).toString();
+  return Response.json(
+    {
+      invitation: {
+        id: invitation.id,
+        email: invitation.email,
+        expiresAt: invitation.expires_at,
+        url: invitationUrl,
+      },
+    },
+    { status: 201 },
+  );
 }
