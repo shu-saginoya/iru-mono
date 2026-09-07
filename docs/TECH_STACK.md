@@ -32,7 +32,7 @@ Google OAuth の開始とセッション管理は Supabase に委譲する。Nex
 
 ### データアクセス
 
-- `users`、`lists`、`list_members`、`items` のみを初期スキーマとする
+- `users`、`lists`、`list_members`、`items`、`list_invitations` を初期スキーマとする
 - Supabase RLS を有効にする
 - API の共通認可処理は共通モジュールに集約する
 - `SUPABASE_SERVICE_ROLE_KEY` はサーバー専用にする
@@ -54,10 +54,10 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 1. Supabase クライアントと OAuth コールバック
 2. `users` 同期
 3. リスト作成・一覧・更新
-4. RLS とメンバー追加・除外
+4. RLS と招待リンク発行・承認、メンバー除外
 5. アイテム CRUD と完了切り替え
 6. 楽観的UIと画面内の状態更新
-7. 後から必要性を確認して Realtime、タグ、招待、削除ジョブを追加
+7. 後から必要性を確認して Realtime、タグ、プッシュ通知、削除ジョブを追加
 
 ## 8. 開発ルール
 
