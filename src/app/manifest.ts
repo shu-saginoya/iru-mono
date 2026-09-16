@@ -6,18 +6,20 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: "IRU MONO",
     start_url: "/",
     display: "standalone",
-    background_color: "#ffffff",
-    theme_color: "#ffffff",
+    background_color: "#E66643",
+    theme_color: "#E66643",
     icons: [
       {
-        src: "/icon-192x192.png",
+        src: "/icon-192.png",
         sizes: "192x192",
         type: "image/png",
+        purpose: "any",
       },
       {
-        src: "/icon-512x512.png",
-        sizes: "512x512",
+        src: "/icon-maskable.png",
+        sizes: "432x432",
         type: "image/png",
+        purpose: "maskable",
       },
     ],
   };
