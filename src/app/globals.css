@@ -245,6 +245,29 @@ input:focus {
   margin-top: 5px;
   font-size: 2rem;
 }
+.refresh-message {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.items-skeleton {
+  display: grid;
+  gap: 1px;
+  border-top: 1px solid var(--line);
+}
+.items-skeleton span {
+  display: block;
+  height: 72px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(90deg, #eef2ed 25%, #f8faf7 50%, #eef2ed 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.2s infinite;
+}
+@keyframes skeleton-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
 .segmented {
   border: 1px solid var(--line);
   padding: 3px;
