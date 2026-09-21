@@ -12,6 +12,7 @@ import { ItemList } from "@/features/dashboard/components/item-list";
 import { ItemModal } from "@/features/dashboard/components/item-modal";
 import { Sidebar } from "@/features/dashboard/components/sidebar";
 import { ListSettingsModal } from "@/features/dashboard/components/list-settings-modal";
+import { readItemCache, writeItemCache } from "@/features/dashboard/item-cache";
 
 type ShoppingList = { id: string; name: string };
 type ListDetails = { id: string; name: string; created_by: string };
@@ -88,6 +89,9 @@ export function Dashboard({
   const [busyItemIds, setBusyItemIds] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [itemError, setItemError] = useState("");
+  const [isLoadingItems, setIsLoadingItems] = useState(false);
+  const [isRefreshingItems, setIsRefreshingItems] = useState(false);
+  const [hasLoadedItemCache, setHasLoadedItemCache] = useState(false);
   const [listError, setListError] = useState("");
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [listDetails, setListDetails] = useState<ListDetails | null>(null);
@@ -118,34 +122,70 @@ export function Dashboard({
     setSelectedListId((current) => current || initialListId);
   }, [lastListKey]);
 
-  const loadItems = useCallback(async (listId: string) => {
-    const requestId = ++itemsRequestId.current;
-    if (!listId) {
+  const loadItems = useCallback(
+    async (listId: string) => {
+      const requestId = ++itemsRequestId.current;
+      setItemError("");
+      setIsLoadingItems(true);
+      setIsRefreshingItems(false);
+      setHasLoadedItemCache(false);
+      itemsRef.current = [];
       setItems([]);
-      return;
-    }
-    const pageSize = 100;
-    const allItems: Item[] = [];
-    let offset = 0;
-    let total = 0;
-    do {
-      const data = await requestJson<{
-        items: Item[];
-        pagination: { total: number };
-      }>(
-        `/lists/${listId}/items?status=all&limit=${pageSize}&offset=${offset}`,
-        {},
-        "アイテムを取得できませんでした",
-      );
-      allItems.push(...data.items);
-      total = data.pagination.total;
-      offset += data.items.length;
-      if (!data.items.length) break;
-    } while (offset < total);
-    if (requestId === itemsRequestId.current) {
-      setItems(allItems);
-    }
-  }, []);
+      if (!listId) {
+        setIsLoadingItems(false);
+        return;
+      }
+      try {
+        const cachedItems = await readItemCache(userId, listId);
+        if (requestId !== itemsRequestId.current) return;
+        if (cachedItems) {
+          itemsRef.current = cachedItems;
+          setItems(cachedItems);
+          setHasLoadedItemCache(true);
+          setIsRefreshingItems(true);
+        }
+
+        const pageSize = 100;
+        const allItems: Item[] = [];
+        let offset = 0;
+        let total = 0;
+        do {
+          const data = await requestJson<{
+            items: Item[];
+            pagination: { total: number };
+          }>(
+            `/lists/${listId}/items?status=all&limit=${pageSize}&offset=${offset}`,
+            {},
+            "アイテムを取得できませんでした",
+          );
+          allItems.push(...data.items);
+          total = data.pagination.total;
+          offset += data.items.length;
+          if (!data.items.length) break;
+        } while (offset < total);
+        if (requestId === itemsRequestId.current) {
+          itemsRef.current = allItems;
+          setItems(allItems);
+          await writeItemCache(userId, listId, allItems);
+        }
+      } catch (cause) {
+        if (requestId === itemsRequestId.current) {
+          setItemError(
+            cause instanceof Error
+              ? cause.message
+              : "アイテムを取得できませんでした",
+          );
+        }
+        throw cause;
+      } finally {
+        if (requestId === itemsRequestId.current) {
+          setIsLoadingItems(false);
+          setIsRefreshingItems(false);
+        }
+      }
+    },
+    [userId],
+  );
 
   async function loadListDetails(listId: string) {
     const response = await fetch(`/lists/${listId}`);
@@ -196,21 +236,11 @@ export function Dashboard({
   }, []);
 
   useEffect(() => {
-    let active = true;
-
     void (async () => {
       try {
         await loadItems(selectedListId);
-      } catch (cause) {
-        if (active && cause instanceof Error) {
-          setError(cause.message);
-        }
-      }
+      } catch {}
     })();
-
-    return () => {
-      active = false;
-    };
   }, [loadItems, selectedListId]);
   useEffect(() => {
     if (selectedListId) localStorage.setItem(lastListKey, selectedListId);
@@ -356,6 +386,7 @@ export function Dashboard({
       setQuantity(1);
       setEditingItem(null);
       setIsItemModalOpen(false);
+      await writeItemCache(userId, listId, itemsRef.current);
       await loadItems(selectedListId);
     } catch (cause) {
       if (!itemBeingEdited) {
@@ -395,6 +426,7 @@ export function Dashboard({
       const nextItems = replaceItem(itemsRef.current, itemId, data.item);
       itemsRef.current = nextItems;
       setItems(nextItems);
+      void writeItemCache(userId, selectedListId, nextItems);
     } catch (cause) {
       const nextItems = rollbackItemMutation(
         itemsRef.current,
@@ -437,6 +469,7 @@ export function Dashboard({
         throw new Error(
           await getRequestError(response, "アイテムを削除できませんでした"),
         );
+      void writeItemCache(userId, selectedListId, nextItems);
     } catch (cause) {
       const restoredItems = [...itemsRef.current];
       restoredItems.splice(itemIndex, 0, item);
@@ -758,6 +791,9 @@ export function Dashboard({
                 (item) => item.is_completed === showCompleted,
               )}
               showCompleted={showCompleted}
+              isLoading={isLoadingItems && !hasLoadedItemCache}
+              isRefreshing={isRefreshingItems}
+              error={itemError}
               busyItemIds={busyItemIds}
               onToggle={toggleItem}
               onEdit={openItemModal}

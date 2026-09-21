@@ -6,6 +6,9 @@ import type { Item } from "@/features/dashboard/item-state";
 type ItemListProps = {
   items: Item[];
   showCompleted: boolean;
+  isLoading: boolean;
+  isRefreshing: boolean;
+  error: string;
   busyItemIds: string[];
   onToggle: (itemId: string) => void;
   onEdit: (item: Item) => void;
@@ -15,11 +18,32 @@ type ItemListProps = {
 export function ItemList({
   items,
   showCompleted,
+  isLoading,
+  isRefreshing,
+  error,
   busyItemIds,
   onToggle,
   onEdit,
   onDelete,
 }: ItemListProps) {
+  if (isLoading) {
+    return (
+      <div className="items-skeleton" aria-label="アイテムを読み込み中">
+        <span />
+        <span />
+        <span />
+      </div>
+    );
+  }
+
+  if (error && !items.length) {
+    return (
+      <div className="empty-state">
+        <p>{error}</p>
+      </div>
+    );
+  }
+
   if (!items.length) {
     return (
       <div className="empty-state">
@@ -34,43 +58,53 @@ export function ItemList({
   }
 
   return (
-    <div className="items-list">
-      {items.map((item) => (
-        <article className="item-row" key={item.id}>
-          <button
-            className={item.is_completed ? "check checked" : "check"}
-            onClick={() => onToggle(item.id)}
-            disabled={busyItemIds.includes(item.id)}
-            aria-label={item.is_completed ? "未完了に戻す" : "完了にする"}
-          >
-            {item.is_completed ? "✓" : ""}
-          </button>
-          <div className="item-copy">
-            <strong>{item.title}</strong>
-            <span>数量 {item.quantity}</span>
-          </div>
-          <button
-            className="utility-button"
-            onClick={() => onEdit(item)}
-            disabled={busyItemIds.includes(item.id)}
-            aria-label="アイテムを編集"
-            title="アイテムを編集"
-          >
-            <Edit3 size={16} />
-          </button>
-          {!item.is_completed && (
+    <>
+      {error && (
+        <p className="error-message" role="alert">
+          {error}
+        </p>
+      )}
+      {isRefreshing && (
+        <p className="refresh-message">最新のアイテムを確認中...</p>
+      )}
+      <div className="items-list">
+        {items.map((item) => (
+          <article className="item-row" key={item.id}>
             <button
-              className="delete-button"
-              onClick={() => onDelete(item)}
+              className={item.is_completed ? "check checked" : "check"}
+              onClick={() => onToggle(item.id)}
               disabled={busyItemIds.includes(item.id)}
-              aria-label="削除"
-              title="削除"
+              aria-label={item.is_completed ? "未完了に戻す" : "完了にする"}
             >
-              <Trash2 size={17} />
+              {item.is_completed ? "✓" : ""}
             </button>
-          )}
-        </article>
-      ))}
-    </div>
+            <div className="item-copy">
+              <strong>{item.title}</strong>
+              <span>数量 {item.quantity}</span>
+            </div>
+            <button
+              className="utility-button"
+              onClick={() => onEdit(item)}
+              disabled={busyItemIds.includes(item.id)}
+              aria-label="アイテムを編集"
+              title="アイテムを編集"
+            >
+              <Edit3 size={16} />
+            </button>
+            {!item.is_completed && (
+              <button
+                className="delete-button"
+                onClick={() => onDelete(item)}
+                disabled={busyItemIds.includes(item.id)}
+                aria-label="削除"
+                title="削除"
+              >
+                <Trash2 size={17} />
+              </button>
+            )}
+          </article>
+        ))}
+      </div>
+    </>
   );
 }
