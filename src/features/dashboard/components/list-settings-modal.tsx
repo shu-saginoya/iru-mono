@@ -9,6 +9,7 @@ type Member = {
     id: string;
     display_name: string | null;
     avatar_url: string | null;
+    email: string | null;
   } | null;
 };
 
@@ -162,17 +163,26 @@ export function ListSettingsModal({
               <div className="members-list">
                 {members.map((member) => (
                   <div className="member-row" key={member.user_id}>
-                    <div>
+                    {member.users?.avatar_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        className="member-avatar"
+                        src={member.users.avatar_url}
+                        alt=""
+                      />
+                    ) : (
+                      <div className="member-avatar member-avatar-placeholder" />
+                    )}
+                    <div className="member-info">
                       <strong>
                         {member.users?.display_name || "名前未設定"}
-                      </strong>
-                      <span>
                         {member.user_id === listDetails.created_by
-                          ? "作成者"
+                          ? "（作成者）"
                           : member.user_id === userId
-                            ? "あなた"
-                            : member.user_id}
-                      </span>
+                            ? "（あなた）"
+                            : ""}
+                      </strong>
+                      <span>{member.users?.email || "メール未設定"}</span>
                     </div>
                     {isOwner && member.user_id !== listDetails.created_by && (
                       <button

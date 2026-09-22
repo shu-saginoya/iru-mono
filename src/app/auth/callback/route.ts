@@ -17,6 +17,7 @@ export async function GET(request: Request) {
           data.user.user_metadata.name ??
           null,
         avatar_url: data.user.user_metadata.avatar_url ?? null,
+        email: data.user.email ?? null,
       });
     }
   }

@@ -497,13 +497,22 @@ input:focus {
 .member-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   padding: 12px 0;
   border-bottom: 1px solid var(--line);
 }
-.member-row div {
+.member-avatar,
+.member-avatar-placeholder {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: var(--line);
+}
+.member-info {
   display: grid;
+  flex: 1;
   min-width: 0;
   gap: 3px;
 }
