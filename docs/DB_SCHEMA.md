@@ -27,6 +27,7 @@ public.lists 1 ─── N public.list_invitations
 | id           | uuid        | PK、auth.users.id 参照 |
 | display_name | text        | nullable               |
 | avatar_url   | text        | nullable               |
+| email        | text        | nullable               |
 | created_at   | timestamptz | default now()          |
 | updated_at   | timestamptz | default now()          |
 
@@ -84,6 +85,7 @@ create table public.users (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text,
   avatar_url text,
+  email text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -148,6 +150,7 @@ create unique index list_invitations_pending_unique_idx
 - 作成者だけが招待発行・メンバー除外・リスト削除を行える
 - 招待承認時のメンバー登録は、招待先メールアドレスとログイン中のメールアドレスを検証する SECURITY DEFINER 関数で行う
 - アイテムの作成・更新・完了切り替えは全メンバーが行える
+- 同じリストのメンバー同士は互いのプロフィール（`users`）を閲覧できる
 - サービスロールキーはサーバー専用にする
 
 ## 6. 将来の拡張

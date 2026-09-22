@@ -23,7 +23,7 @@ export async function GET(_request: Request, { params }: ListRouteContext) {
 
   const { data: members, error } = await access.supabase
     .from("list_members")
-    .select("user_id, joined_at, users(id, display_name, avatar_url)")
+    .select("user_id, joined_at, users(id, display_name, avatar_url, email)")
     .eq("list_id", listId);
   if (error)
     return Response.json(
