@@ -15,6 +15,7 @@
 | DB              | Supabase PostgreSQL                      | DB 運用を外部化する                   |
 | DB クライアント | `@supabase/ssr`、`@supabase/supabase-js` | Next.js と Supabase Auth に対応する   |
 | 入力検証        | Zod                                      | API 入力を一元検証する                |
+| サーバー状態    | TanStack Query                           | 取得、キャッシュ、更新を一元管理する  |
 | ホスティング    | Vercel                                   | Next.js のデプロイを簡単にする        |
 | パッケージ管理  | pnpm                                     | 依存関係を一元管理する                |
 
@@ -38,6 +39,17 @@ Google OAuth の開始とセッション管理は Supabase に委譲する。Nex
 - `SUPABASE_SERVICE_ROLE_KEY` はサーバー専用にする
 - DB 変更は SQL マイグレーションで管理する
 
+### クライアントのサーバー状態
+
+- TanStack Query をリスト、リスト詳細、メンバー、招待、アイテムの取得と更新に使用する
+- query key はユーザー ID、リスト ID、取得条件を含め、共有モジュールで定義する
+- API 呼び出しと query / mutation hook は UI コンポーネントから分離する
+- 作成、更新、削除は mutation で楽観的にキャッシュを更新し、失敗時は更新前のキャッシュへ戻す
+- mutation の完了後は、影響を受ける query を更新または無効化する
+- 他ユーザーの変更は Realtime で受信しない。必要な再取得は mutation 完了後と画面復帰時に限定する
+- アイテム query は IndexedDB へ永続化する。キャッシュはユーザー ID ごとに分離し、ログアウト時に削除する
+- アイテム一覧は API のページングを吸収して全件をキャッシュする。UI に無限スクロールは追加しない
+
 ## 6. 環境変数
 
 ```text
@@ -56,7 +68,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 3. リスト作成・一覧・更新
 4. RLS と招待リンク発行・承認、メンバー除外
 5. アイテム CRUD と完了切り替え
-6. 楽観的UIと画面内の状態更新
+6. TanStack Query による楽観的 UI、キャッシュ、画面内の状態更新
 7. 後から必要性を確認して Realtime、タグ、プッシュ通知、削除ジョブを追加
 
 ## 8. 開発ルール
@@ -69,4 +81,4 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 詳細なテスト手順は [テスト方針](TESTING.md) を参照する。
 
-最終更新: 2026年9月2日
+最終更新: 2026年10月14日
