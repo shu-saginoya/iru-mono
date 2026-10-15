@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   dashboardQueryKeys,
   fetchAllItems,
+  rollbackItemCreate,
+  rollbackItemDelete,
+  rollbackItemEdit,
+  rollbackItemToggle,
+  rollbackListCreate,
+  rollbackListUpdate,
 } from "./dashboard-queries";
+import type { Item } from "./item-state";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -67,5 +74,74 @@ describe("fetchAllItems", () => {
       "/lists/list-1/items?status=all&limit=100&offset=100",
       {},
     );
+  });
+});
+
+describe("optimistic mutation rollback", () => {
+  const first: Item = {
+    id: "item-1",
+    title: "milk",
+    quantity: 1,
+    is_completed: false,
+  };
+  const second: Item = {
+    id: "item-2",
+    title: "eggs",
+    quantity: 2,
+    is_completed: false,
+  };
+
+  it("rolls back only the failed item when another toggle succeeds", () => {
+    const optimisticallyUpdated = [
+      { ...first, is_completed: true },
+      { ...second, is_completed: true },
+    ];
+
+    expect(rollbackItemToggle(optimisticallyUpdated, first)).toEqual([
+      first,
+      { ...second, is_completed: true },
+    ]);
+  });
+
+  it("preserves other item changes when an item creation fails", () => {
+    expect(
+      rollbackItemCreate(
+        [{ ...first, id: "optimistic-item" }, { ...second, title: "changed" }],
+        "optimistic-item",
+      ),
+    ).toEqual([{ ...second, title: "changed" }]);
+  });
+
+  it("restores edited fields without reverting another item's changes", () => {
+    expect(
+      rollbackItemEdit(
+        [{ ...first, title: "optimistic name" }, { ...second, quantity: 4 }],
+        first,
+      ),
+    ).toEqual([first, { ...second, quantity: 4 }]);
+  });
+
+  it("restores a deleted item without replacing concurrent item changes", () => {
+    expect(
+      rollbackItemDelete([{ ...second, title: "changed" }], first, 0),
+    ).toEqual([first, { ...second, title: "changed" }]);
+  });
+
+  it("rolls back only the affected list", () => {
+    const lists = [
+      { id: "list-1", name: "optimistic name" },
+      { id: "list-2", name: "changed name" },
+    ];
+
+    expect(
+      rollbackListCreate(
+        [{ id: "optimistic-list", name: "new list" }, ...lists],
+        "optimistic-list",
+      ),
+    ).toEqual(lists);
+    expect(rollbackListUpdate(lists, "list-1", "old name")).toEqual([
+      { id: "list-1", name: "old name" },
+      { id: "list-2", name: "changed name" },
+    ]);
   });
 });

@@ -27,7 +27,10 @@ function getDatabase(): Promise<IDBDatabase> {
         });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      request.result.onversionchange = () => request.result.close();
+      resolve(request.result);
+    };
     request.onerror = () =>
       reject(request.error ?? new Error("IndexedDB error"));
   });
@@ -37,18 +40,30 @@ export async function readItemCache(userId: string, listId: string) {
   try {
     const database = await getDatabase();
     return await new Promise<Item[] | null>((resolve, reject) => {
-      const request = database
-        .transaction(storeName, "readonly")
-        .objectStore(storeName)
-        .get([userId, listId]);
+      const transaction = database.transaction(storeName, "readonly");
+      const request = transaction.objectStore(storeName).get([userId, listId]);
+      let items: Item[] | null = null;
       request.onsuccess = () => {
         const record = request.result as ItemCacheRecord | undefined;
-        resolve(record?.items ?? null);
+        items = record?.items ?? null;
       };
       request.onerror = () =>
         reject(request.error ?? new Error("IndexedDB error"));
+      transaction.oncomplete = () => {
+        database.close();
+        resolve(items);
+      };
+      transaction.onerror = () => {
+        database.close();
+        reject(transaction.error ?? new Error("IndexedDB error"));
+      };
+      transaction.onabort = () => {
+        database.close();
+        reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
+      };
     });
-  } catch {
+  } catch (error) {
+    console.warn("Unable to read cached items from IndexedDB", error);
     return null;
   }
 }
@@ -68,11 +83,50 @@ export async function writeItemCache(
         items,
         updatedAt: Date.now(),
       } satisfies ItemCacheRecord);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () =>
+      transaction.oncomplete = () => {
+        database.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        database.close();
         reject(transaction.error ?? new Error("IndexedDB error"));
+      };
+      transaction.onabort = () => {
+        database.close();
+        reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
+      };
     });
-  } catch {
-    // IndexedDB is an enhancement; API data remains authoritative.
+  } catch (error) {
+    console.warn("Unable to persist cached items to IndexedDB", error);
   }
+}
+
+export async function clearItemCacheForUser(userId: string) {
+  const database = await getDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(storeName, "readwrite");
+    const store = transaction.objectStore(storeName);
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const record = cursor.value as ItemCacheRecord;
+      if (record.userId === userId) cursor.delete();
+      cursor.continue();
+    };
+    request.onerror = () =>
+      reject(request.error ?? new Error("IndexedDB error"));
+    transaction.oncomplete = () => {
+      database.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error ?? new Error("IndexedDB error"));
+    };
+    transaction.onabort = () => {
+      database.close();
+      reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
+    };
+  });
 }

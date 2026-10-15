@@ -2,6 +2,7 @@
 
 import {
   useMutation,
+  useMutationState,
   useQuery,
   useQueryClient,
   type QueryClient,
@@ -38,6 +39,15 @@ export const dashboardQueryKeys = {
     ["dashboard", userId, "lists", listId, "details"] as const,
   items: (userId: string, listId: string) =>
     ["dashboard", userId, "lists", listId, "items", "all"] as const,
+};
+
+export const dashboardMutationKeys = {
+  saveItem: (userId: string) =>
+    ["dashboard", userId, "mutations", "save-item"] as const,
+  toggleItem: (userId: string) =>
+    ["dashboard", userId, "mutations", "toggle-item"] as const,
+  deleteItem: (userId: string) =>
+    ["dashboard", userId, "mutations", "delete-item"] as const,
 };
 
 async function getRequestError(response: Response, fallback: string) {
@@ -108,6 +118,69 @@ export async function fetchAllItems(listId: string) {
   return items;
 }
 
+export function rollbackItemCreate(items: Item[], optimisticId: string) {
+  return items.filter((item) => item.id !== optimisticId);
+}
+
+export function rollbackItemEdit(items: Item[], previousItem: Item) {
+  return items.map((item) =>
+    item.id === previousItem.id
+      ? {
+          ...item,
+          title: previousItem.title,
+          quantity: previousItem.quantity,
+        }
+      : item,
+  );
+}
+
+export function rollbackItemToggle(items: Item[], previousItem: Item) {
+  return items.map((item) =>
+    item.id === previousItem.id
+      ? { ...item, is_completed: previousItem.is_completed }
+      : item,
+  );
+}
+
+export function rollbackItemDelete(
+  items: Item[],
+  deletedItem: Item,
+  previousIndex: number,
+) {
+  if (items.some((item) => item.id === deletedItem.id)) return items;
+  const restored = [...items];
+  restored.splice(Math.min(previousIndex, restored.length), 0, deletedItem);
+  return restored;
+}
+
+export function rollbackListCreate(
+  lists: ShoppingList[],
+  optimisticId: string,
+) {
+  return lists.filter((list) => list.id !== optimisticId);
+}
+
+export function rollbackListUpdate(
+  lists: ShoppingList[],
+  listId: string,
+  previousName: string,
+) {
+  return lists.map((list) =>
+    list.id === listId ? { ...list, name: previousName } : list,
+  );
+}
+
+function restoreListAtIndex(
+  lists: ShoppingList[],
+  previousList: ShoppingList,
+  previousIndex: number,
+) {
+  if (lists.some((list) => list.id === previousList.id)) return lists;
+  const restored = [...lists];
+  restored.splice(Math.min(previousIndex, restored.length), 0, previousList);
+  return restored;
+}
+
 function replaceItem(items: Item[], itemId: string, replacement: Item) {
   return items.map((item) => (item.id === itemId ? replacement : item));
 }
@@ -169,17 +242,18 @@ export function useItemsQuery(userId: string, listId: string) {
   useEffect(() => {
     let active = true;
     if (!listId) return;
+    const cacheKey = dashboardQueryKeys.items(userId, listId);
 
     void readItemCache(userId, listId).then((cachedItems) => {
-      if (active && cachedItems && !queryClient.getQueryData(queryKey)) {
-        queryClient.setQueryData(queryKey, cachedItems);
+      if (active && cachedItems && !queryClient.getQueryData(cacheKey)) {
+        queryClient.setQueryData(cacheKey, cachedItems);
       }
     });
 
     return () => {
       active = false;
     };
-  }, [listId, queryClient, queryKey, userId]);
+  }, [listId, queryClient, userId]);
 
   const query = useQuery({
     queryKey,
@@ -197,6 +271,28 @@ export function useItemsQuery(userId: string, listId: string) {
 export function useDashboardMutations(userId: string) {
   const queryClient = useQueryClient();
   const listsKey = dashboardQueryKeys.lists(userId);
+  const pendingItemIds = useMutationState<unknown>({
+    filters: {
+      mutationKey: ["dashboard", userId, "mutations"],
+      status: "pending",
+    },
+    select: (mutation) => mutation.state.variables,
+  })
+    .map((variables) => {
+      if (!variables || typeof variables !== "object") return null;
+      const operation = variables as {
+        listId?: unknown;
+        item?: { id?: unknown };
+        itemId?: unknown;
+      };
+      const itemId = operation.item?.id ?? operation.itemId;
+      return typeof operation.listId === "string" && typeof itemId === "string"
+        ? { listId: operation.listId, itemId }
+        : null;
+    })
+    .filter(
+      (entry): entry is { listId: string; itemId: string } => entry !== null,
+    );
 
   const createList = useMutation({
     mutationFn: (name: string) =>
@@ -210,14 +306,19 @@ export function useDashboardMutations(userId: string) {
         "リストを作成できませんでした",
       ).then((data) => data.list),
     onMutate: async (name) => {
-      await queryClient.cancelQueries({ queryKey: listsKey });
-      const previous = queryClient.getQueryData<ShoppingList[]>(listsKey) ?? [];
-      const optimistic = { id: `optimistic-${crypto.randomUUID()}`, name: name.trim() };
-      queryClient.setQueryData(listsKey, [optimistic, ...previous]);
-      return { optimisticId: optimistic.id, previous };
-    },
-    onError: (_error, _name, context) => {
-      if (context) queryClient.setQueryData(listsKey, context.previous);
+        await queryClient.cancelQueries({ queryKey: listsKey, exact: true });
+        const optimistic = { id: `optimistic-${crypto.randomUUID()}`, name: name.trim() };
+        queryClient.setQueryData<ShoppingList[]>(listsKey, (lists = []) => [
+          optimistic,
+          ...lists,
+        ]);
+        return { optimisticId: optimistic.id };
+      },
+      onError: (_error, _name, context) => {
+        if (!context) return;
+        queryClient.setQueryData<ShoppingList[]>(listsKey, (lists = []) =>
+          rollbackListCreate(lists, context.optimisticId),
+        );
     },
     onSuccess: (list, _name, context) => {
       queryClient.setQueryData<ShoppingList[]>(listsKey, (lists = []) =>
@@ -226,10 +327,12 @@ export function useDashboardMutations(userId: string) {
         ),
       );
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: listsKey }),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: listsKey, exact: true }),
   });
 
   const saveItem = useMutation({
+    mutationKey: dashboardMutationKeys.saveItem(userId),
     mutationFn: ({
       listId,
       item,
@@ -249,10 +352,19 @@ export function useDashboardMutations(userId: string) {
     onMutate: async ({ listId, item }) => {
       const key = dashboardQueryKeys.items(userId, listId);
       await queryClient.cancelQueries({ queryKey: key });
+      const previousItems =
+        queryClient.getQueryData<Item[]>(key) ?? [];
+      const previousItem = item.id
+        ? previousItems.find((current) => current.id === item.id)
+        : undefined;
       const optimisticId = item.id ?? `optimistic-${crypto.randomUUID()}`;
-      const previous = withItems(queryClient, userId, listId, (items) =>
+      withItems(queryClient, userId, listId, (items) =>
         item.id
-          ? replaceItem(items, item.id, { ...item, id: item.id, is_completed: false })
+          ? items.map((current) =>
+              current.id === item.id
+                ? { ...current, title: item.title.trim(), quantity: item.quantity }
+                : current,
+            )
           : [
               {
                 id: optimisticId,
@@ -263,11 +375,17 @@ export function useDashboardMutations(userId: string) {
               ...items,
             ],
       );
-      return { previous, key, optimisticId };
+      return { key, optimisticId, previousItem };
     },
     onError: (_error, variables, context) => {
-      if (context) queryClient.setQueryData(context.key, context.previous);
-      void variables;
+      if (!context) return;
+      queryClient.setQueryData<Item[]>(context.key, (items = []) =>
+        variables.item.id
+          ? context.previousItem
+            ? rollbackItemEdit(items, context.previousItem)
+            : items
+          : rollbackItemCreate(items, context.optimisticId),
+      );
     },
     onSuccess: (item, variables, context) => {
       if (!context) return;
@@ -282,6 +400,7 @@ export function useDashboardMutations(userId: string) {
   });
 
   const toggleItem = useMutation({
+    mutationKey: dashboardMutationKeys.toggleItem(userId),
     mutationFn: ({ listId, itemId }: { listId: string; itemId: string }) =>
       requestJson<{ item: Item }>(
         `/lists/${listId}/items/${itemId}/toggle`,
@@ -291,15 +410,22 @@ export function useDashboardMutations(userId: string) {
     onMutate: async ({ listId, itemId }) => {
       const key = dashboardQueryKeys.items(userId, listId);
       await queryClient.cancelQueries({ queryKey: key });
-      const previous = withItems(queryClient, userId, listId, (items) =>
+      const previousItem = queryClient
+        .getQueryData<Item[]>(key)
+        ?.find((item) => item.id === itemId);
+      withItems(queryClient, userId, listId, (items) =>
         items.map((item) =>
           item.id === itemId ? { ...item, is_completed: !item.is_completed } : item,
         ),
       );
-      return { previous, key };
+      return { previousItem, key };
     },
     onError: (_error, _variables, context) => {
-      if (context) queryClient.setQueryData(context.key, context.previous);
+      if (context?.previousItem) {
+        queryClient.setQueryData<Item[]>(context.key, (items = []) =>
+          rollbackItemToggle(items, context.previousItem!),
+        );
+      }
     },
     onSuccess: (item, variables) => {
       queryClient.setQueryData<Item[]>(
@@ -314,6 +440,7 @@ export function useDashboardMutations(userId: string) {
   });
 
   const deleteItem = useMutation({
+    mutationKey: dashboardMutationKeys.deleteItem(userId),
     mutationFn: ({ listId, itemId }: { listId: string; itemId: string }) =>
       requestEmpty(
         `/lists/${listId}/items/${itemId}`,
@@ -323,13 +450,26 @@ export function useDashboardMutations(userId: string) {
     onMutate: async ({ listId, itemId }) => {
       const key = dashboardQueryKeys.items(userId, listId);
       await queryClient.cancelQueries({ queryKey: key });
-      const previous = withItems(queryClient, userId, listId, (items) =>
+      const previousItems = queryClient.getQueryData<Item[]>(key) ?? [];
+      const previousIndex = previousItems.findIndex(
+        (item) => item.id === itemId,
+      );
+      const deletedItem = previousItems[previousIndex];
+      withItems(queryClient, userId, listId, (items) =>
         items.filter((item) => item.id !== itemId),
       );
-      return { previous, key };
+      return { deletedItem, previousIndex, key };
     },
     onError: (_error, _variables, context) => {
-      if (context) queryClient.setQueryData(context.key, context.previous);
+      if (context?.deletedItem && context.previousIndex >= 0) {
+        queryClient.setQueryData<Item[]>(context.key, (items = []) =>
+          rollbackItemDelete(
+            items,
+            context.deletedItem!,
+            context.previousIndex,
+          ),
+        );
+      }
     },
     onSettled: (_data, _error, variables) =>
       queryClient.invalidateQueries({
@@ -351,11 +491,12 @@ export function useDashboardMutations(userId: string) {
     onMutate: async ({ listId, name }) => {
       const detailsKey = dashboardQueryKeys.listDetails(userId, listId);
       await Promise.all([
-        queryClient.cancelQueries({ queryKey: listsKey }),
+        queryClient.cancelQueries({ queryKey: listsKey, exact: true }),
         queryClient.cancelQueries({ queryKey: detailsKey }),
       ]);
       const previousLists =
         queryClient.getQueryData<ShoppingList[]>(listsKey) ?? [];
+      const previousList = previousLists.find((list) => list.id === listId);
       const previousDetails = queryClient.getQueryData<{
         list: ListDetails;
         members: Member[];
@@ -370,12 +511,40 @@ export function useDashboardMutations(userId: string) {
           ? { ...details, list: { ...details.list, name: name.trim() } }
           : details,
       );
-      return { previousLists, previousDetails, detailsKey };
+      return {
+        previousList,
+        previousDetails,
+        detailsKey,
+        previousListName: previousList?.name,
+        previousDetailsName: previousDetails?.list.name,
+      };
     },
     onError: (_error, _variables, context) => {
       if (!context) return;
-      queryClient.setQueryData(listsKey, context.previousLists);
-      queryClient.setQueryData(context.detailsKey, context.previousDetails);
+      if (context.previousList) {
+        queryClient.setQueryData<ShoppingList[]>(listsKey, (lists = []) =>
+          lists.map((list) =>
+            list.id === context.previousList!.id && context.previousListName
+              ? { ...list, name: context.previousListName }
+              : list,
+          ),
+        );
+      }
+      if (context.previousDetails && context.previousDetailsName) {
+        queryClient.setQueryData(
+          context.detailsKey,
+          (details: typeof context.previousDetails) =>
+            details
+              ? {
+                  ...details,
+                  list: {
+                    ...details.list,
+                    name: context.previousDetailsName!,
+                  },
+                }
+              : details,
+        );
+      }
     },
     onSuccess: (list, variables) => {
       queryClient.setQueryData<ShoppingList[]>(listsKey, (lists = []) =>
@@ -384,13 +553,22 @@ export function useDashboardMutations(userId: string) {
       queryClient.setQueryData(
         dashboardQueryKeys.listDetails(userId, variables.listId),
         (details: { list: ListDetails; members: Member[] } | undefined) =>
-          details ? { ...details, list: { ...details.list, name: list.name } } : details,
+          details
+            ? { ...details, list: { ...details.list, name: list.name } }
+            : details,
       );
     },
     onSettled: (_data, _error, variables) =>
-      queryClient.invalidateQueries({
-        queryKey: dashboardQueryKeys.listDetails(userId, variables.listId),
-      }),
+      Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: listsKey,
+          exact: true,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: dashboardQueryKeys.listDetails(userId, variables.listId),
+          exact: true,
+        }),
+      ]),
   });
 
   const createInvitation = useMutation({
@@ -427,18 +605,27 @@ export function useDashboardMutations(userId: string) {
         "リストから退会できませんでした",
       ),
     onMutate: async (listId) => {
-      await queryClient.cancelQueries({ queryKey: listsKey });
+      await queryClient.cancelQueries({ queryKey: listsKey, exact: true });
       const previousLists =
         queryClient.getQueryData<ShoppingList[]>(listsKey) ?? [];
+      const previousList = previousLists.find((list) => list.id === listId);
+      const previousIndex = previousLists.findIndex(
+        (list) => list.id === listId,
+      );
       queryClient.setQueryData<ShoppingList[]>(listsKey, (lists = []) =>
         lists.filter((list) => list.id !== listId),
       );
-      return { previousLists };
+      return { previousList, previousIndex };
     },
     onError: (_error, _listId, context) => {
-      if (context) queryClient.setQueryData(listsKey, context.previousLists);
+      if (context?.previousList) {
+        queryClient.setQueryData<ShoppingList[]>(listsKey, (lists = []) =>
+          restoreListAtIndex(lists, context.previousList!, context.previousIndex),
+        );
+      }
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: listsKey }),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: listsKey, exact: true }),
   });
 
   const deleteList = useMutation({
@@ -449,18 +636,27 @@ export function useDashboardMutations(userId: string) {
         "リストを削除できませんでした",
       ),
     onMutate: async (listId) => {
-      await queryClient.cancelQueries({ queryKey: listsKey });
+      await queryClient.cancelQueries({ queryKey: listsKey, exact: true });
       const previousLists =
         queryClient.getQueryData<ShoppingList[]>(listsKey) ?? [];
+      const previousList = previousLists.find((list) => list.id === listId);
+      const previousIndex = previousLists.findIndex(
+        (list) => list.id === listId,
+      );
       queryClient.setQueryData<ShoppingList[]>(listsKey, (lists = []) =>
         lists.filter((list) => list.id !== listId),
       );
-      return { previousLists };
+      return { previousList, previousIndex };
     },
     onError: (_error, _listId, context) => {
-      if (context) queryClient.setQueryData(listsKey, context.previousLists);
+      if (context?.previousList) {
+        queryClient.setQueryData<ShoppingList[]>(listsKey, (lists = []) =>
+          restoreListAtIndex(lists, context.previousList!, context.previousIndex),
+        );
+      }
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: listsKey }),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: listsKey, exact: true }),
   });
 
   return {
@@ -473,5 +669,6 @@ export function useDashboardMutations(userId: string) {
     removeMember,
     leaveList,
     deleteList,
+    pendingItemIds,
   };
 }

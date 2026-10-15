@@ -1,6 +1,7 @@
 "use client";
 
 import { Settings } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import type { Item } from "@/features/dashboard/item-state";
 import { ItemList } from "@/features/dashboard/components/item-list";
@@ -14,6 +15,7 @@ import {
   useItemsQuery,
   useListDetailsQuery,
 } from "@/features/dashboard/dashboard-queries";
+import { clearItemCacheForUser } from "@/features/dashboard/item-cache";
 
 const emptyLists: { id: string; name: string }[] = [];
 const emptyInvitations: {
@@ -42,24 +44,30 @@ export function Dashboard({
   const [listError, setListError] = useState("");
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [editedListName, setEditedListName] = useState("");
+  const [hasEditedListName, setHasEditedListName] = useState(false);
   const [memberEmail, setMemberEmail] = useState("");
   const [inviteMessage, setInviteMessage] = useState("");
   const [invitationUrl, setInvitationUrl] = useState("");
   const itemTitleInput = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
   const lastListKey = `iru-mono:last-list:${userId}`;
 
   const listsQuery = useDashboardListsQuery(userId);
   const invitationsQuery = useInvitationsQuery(userId);
   const lists = listsQuery.data ?? emptyLists;
+  const selectableLists = lists.filter(
+    (list) => !list.id.startsWith("optimistic-"),
+  );
   const invitations = invitationsQuery.data ?? emptyInvitations;
   const savedListId =
     typeof window === "undefined" ? null : localStorage.getItem(lastListKey);
   const activeListId =
-    selectedListId && lists.some((list) => list.id === selectedListId)
+    selectedListId &&
+    selectableLists.some((list) => list.id === selectedListId)
       ? selectedListId
-      : lists.some((list) => list.id === savedListId)
+      : selectableLists.some((list) => list.id === savedListId)
         ? (savedListId ?? "")
-        : (lists[0]?.id ?? "");
+        : (selectableLists[0]?.id ?? "");
   const itemsQuery = useItemsQuery(userId, activeListId);
   const detailsQuery = useListDetailsQuery(
     userId,
@@ -69,6 +77,9 @@ export function Dashboard({
   const items = itemsQuery.data ?? emptyItems;
   const listDetails = detailsQuery.data?.list ?? null;
   const members = detailsQuery.data?.members ?? [];
+  const effectiveEditedListName = hasEditedListName
+    ? editedListName
+    : (listDetails?.name ?? editedListName);
   const isCreatingList = mutations.createList.isPending;
   const isCreatingItem = mutations.saveItem.isPending;
   const isSavingList =
@@ -77,14 +88,9 @@ export function Dashboard({
     mutations.createInvitation.isPending ||
     mutations.removeMember.isPending ||
     mutations.leaveList.isPending;
-  const busyItemIds = [
-    ...(mutations.toggleItem.isPending
-      ? [mutations.toggleItem.variables.itemId]
-      : []),
-    ...(mutations.deleteItem.isPending
-      ? [mutations.deleteItem.variables.itemId]
-      : []),
-  ];
+  const busyItemIds = mutations.pendingItemIds
+    .filter((mutation) => mutation.listId === activeListId)
+    .map((mutation) => mutation.itemId);
 
   useEffect(() => {
     if (activeListId) localStorage.setItem(lastListKey, activeListId);
@@ -106,6 +112,7 @@ export function Dashboard({
   }, [isCreatingItem, isManagingMember, isSavingList]);
 
   function selectList(listId: string) {
+    if (listId.startsWith("optimistic-")) return;
     setSelectedListId(listId);
     setIsSidebarOpen(false);
     setError("");
@@ -127,7 +134,8 @@ export function Dashboard({
   function openListModal() {
     if (!activeListId) return;
     setListError("");
-    setEditedListName(lists.find((list) => list.id === activeListId)?.name ?? "");
+    setEditedListName("");
+    setHasEditedListName(false);
     setIsListModalOpen(true);
   }
 
@@ -215,7 +223,7 @@ export function Dashboard({
     try {
       await mutations.updateList.mutateAsync({
         listId: activeListId,
-        name: editedListName,
+        name: effectiveEditedListName,
       });
     } catch (cause) {
       setListError(
@@ -328,7 +336,15 @@ export function Dashboard({
       setError("ログアウトできませんでした");
       return;
     }
-    if ("indexedDB" in window) indexedDB.deleteDatabase("iru-mono");
+    queryClient.clear();
+    try {
+      await clearItemCacheForUser(userId);
+    } catch {
+      setError(
+        "ログアウトしましたが、端末内キャッシュを削除できませんでした。接続中の他のタブを閉じてから再試行してください。",
+      );
+      return;
+    }
     window.location.reload();
   }
 
@@ -432,7 +448,14 @@ export function Dashboard({
               showCompleted={showCompleted}
               isLoading={itemsQuery.isLoading && !itemsQuery.data}
               isRefreshing={itemsQuery.isFetching && Boolean(items.length)}
-              error={itemError}
+              error={
+                itemError ||
+                (itemsQuery.error instanceof Error
+                  ? itemsQuery.error.message
+                  : itemsQuery.error
+                    ? "アイテムを取得できませんでした"
+                    : "")
+              }
               busyItemIds={busyItemIds}
               onToggle={toggleItem}
               onEdit={openItemModal}
@@ -469,14 +492,7 @@ export function Dashboard({
           editingItem={editingItem}
           itemTitle={itemTitle}
           quantity={quantity}
-          itemError={
-            itemError ||
-            (itemsQuery.error instanceof Error
-              ? itemsQuery.error.message
-              : itemsQuery.error
-                ? "アイテムを取得できませんでした"
-                : "")
-          }
+          itemError={itemError}
           isCreatingItem={isCreatingItem}
           itemTitleInput={itemTitleInput}
           onClose={closeItemModal}
@@ -490,7 +506,7 @@ export function Dashboard({
           userId={userId}
           listDetails={listDetails}
           members={members}
-          editedListName={editedListName}
+          editedListName={effectiveEditedListName}
           memberEmail={memberEmail}
           listError={listError || (detailsQuery.error instanceof Error ? detailsQuery.error.message : "")}
           inviteMessage={inviteMessage}
@@ -499,7 +515,10 @@ export function Dashboard({
           isManagingMember={isManagingMember}
           onClose={() => setIsListModalOpen(false)}
           onUpdateList={updateList}
-          onEditedListNameChange={setEditedListName}
+          onEditedListNameChange={(value) => {
+            setHasEditedListName(true);
+            setEditedListName(value);
+          }}
           onAddMember={addMember}
           onMemberEmailChange={setMemberEmail}
           onCopyInvitation={copyInvitation}
