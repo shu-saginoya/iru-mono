@@ -49,6 +49,7 @@ export function Dashboard({
   const [inviteMessage, setInviteMessage] = useState("");
   const [invitationUrl, setInvitationUrl] = useState("");
   const itemTitleInput = useRef<HTMLInputElement>(null);
+  const itemModalListIdRef = useRef<string | null>(null);
   const queryClient = useQueryClient();
   const lastListKey = `iru-mono:last-list:${userId}`;
 
@@ -101,6 +102,18 @@ export function Dashboard({
   }, [isItemModalOpen]);
 
   useEffect(() => {
+    if (!isItemModalOpen || !itemModalListIdRef.current) return;
+    if (itemModalListIdRef.current !== activeListId) {
+      setIsItemModalOpen(false);
+      setEditingItem(null);
+      setItemTitle("");
+      setQuantity(1);
+      setItemError("");
+      itemModalListIdRef.current = null;
+    }
+  }, [activeListId, isItemModalOpen]);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       if (!isCreatingItem) setIsItemModalOpen(false);
@@ -124,11 +137,15 @@ export function Dashboard({
     setEditingItem(item ?? null);
     setItemTitle(item?.title ?? "");
     setQuantity(item?.quantity ?? 1);
+    itemModalListIdRef.current = activeListId;
     setIsItemModalOpen(true);
   }
 
   function closeItemModal() {
-    if (!isCreatingItem) setIsItemModalOpen(false);
+    if (!isCreatingItem) {
+      setIsItemModalOpen(false);
+      itemModalListIdRef.current = null;
+    }
   }
 
   function openListModal() {
@@ -170,6 +187,7 @@ export function Dashboard({
       setItemTitle("");
       setQuantity(1);
       setEditingItem(null);
+      itemModalListIdRef.current = null;
       setIsItemModalOpen(false);
     } catch (cause) {
       setItemError(

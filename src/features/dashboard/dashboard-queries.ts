@@ -73,7 +73,10 @@ async function requestJson<T>(
   let response: Response;
   try {
     response = await fetch(input, init);
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
     throw new Error("通信に失敗しました。接続を確認してください");
   }
   if (!response.ok) throw new Error(await getRequestError(response, fallback));
@@ -92,25 +95,35 @@ async function requestEmpty(
   let response: Response;
   try {
     response = await fetch(input, init);
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
     throw new Error("通信に失敗しました。接続を確認してください");
   }
   if (!response.ok) throw new Error(await getRequestError(response, fallback));
 }
 
-export async function fetchAllItems(userId: string, listId: string) {
+export async function fetchAllItems(
+  userId: string,
+  listId: string,
+  signal?: AbortSignal,
+) {
   const pageSize = 100;
   const items: Item[] = [];
   let offset = 0;
   let total = 0;
 
   do {
+    if (signal?.aborted) {
+      throw new DOMException("The operation was aborted", "AbortError");
+    }
     const data = await requestJson<{
       items: Item[];
       pagination: { total: number };
     }>(
       `/lists/${listId}/items?status=all&limit=${pageSize}&offset=${offset}`,
-      {},
+      { signal },
       "アイテムを取得できませんでした",
     );
     items.push(...data.items);
@@ -118,6 +131,10 @@ export async function fetchAllItems(userId: string, listId: string) {
     offset += data.items.length;
     if (!data.items.length) break;
   } while (offset < total);
+
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted", "AbortError");
+  }
 
   await writeItemCache(userId, listId, items);
   return items;
@@ -148,13 +165,21 @@ async function invalidateAfterMutationsSettle(
       ).length;
   const initialPendingCount = countPendingMutations();
   if (initialPendingCount <= 1) {
-    await queryClient.invalidateQueries({ queryKey, exact: true });
+    await queryClient.invalidateQueries({
+      queryKey,
+      exact: true,
+      refetchType: "all",
+    });
     return;
   }
 
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
   if (countPendingMutations() <= 1) {
-    await queryClient.invalidateQueries({ queryKey, exact: true });
+    await queryClient.invalidateQueries({
+      queryKey,
+      exact: true,
+      refetchType: "all",
+    });
   }
 }
 
@@ -306,7 +331,7 @@ export function useItemsQuery(userId: string, listId: string) {
 
   const query = useQuery({
     queryKey,
-    queryFn: () => fetchAllItems(userId, listId),
+    queryFn: ({ signal }) => fetchAllItems(userId, listId, signal),
     enabled: Boolean(listId),
   });
 
@@ -631,6 +656,7 @@ export function useDashboardMutations(userId: string) {
         queryClient.invalidateQueries({
           queryKey: dashboardQueryKeys.listDetails(userId, variables.listId),
           exact: true,
+          refetchType: "all",
         }),
       ]),
   });
@@ -658,6 +684,7 @@ export function useDashboardMutations(userId: string) {
     onSettled: (_data, _error, variables) =>
       queryClient.invalidateQueries({
         queryKey: dashboardQueryKeys.listDetails(userId, variables.listId),
+        refetchType: "all",
       }),
   });
 

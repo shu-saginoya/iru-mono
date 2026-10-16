@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as itemCache from "./item-cache";
 import {
   dashboardQueryKeys,
   fetchAllItems,
@@ -69,13 +70,34 @@ describe("fetchAllItems", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/lists/list-1/items?status=all&limit=100&offset=0",
-      {},
+      { signal: undefined },
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/lists/list-1/items?status=all&limit=100&offset=100",
-      {},
+      { signal: undefined },
     );
+  });
+
+  it("skips cache writes when an in-flight fetch is aborted", async () => {
+    const controller = new AbortController();
+    const writeSpy = vi.spyOn(itemCache, "writeItemCache").mockResolvedValue();
+    const fetchMock = vi.fn(async () => {
+      controller.abort();
+      return {
+        ok: true,
+        json: async () => ({
+          items: [{ id: "item-1", title: "milk", quantity: 1, is_completed: false }],
+          pagination: { total: 1 },
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchAllItems("user-a", "list-1", controller.signal),
+    ).rejects.toThrow(/AbortError|aborted/i);
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 });
 

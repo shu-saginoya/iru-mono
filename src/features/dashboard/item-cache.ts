@@ -28,8 +28,12 @@ function getDatabase(): Promise<IDBDatabase> {
       }
     };
     request.onsuccess = () => {
-      request.result.onversionchange = () => request.result.close();
-      resolve(request.result);
+      const database = request.result;
+      database.onversionchange = () => database.close();
+      resolve(database);
+    };
+    request.onblocked = () => {
+      reject(new Error("IndexedDB is blocked by another connection"));
     };
     request.onerror = () =>
       reject(request.error ?? new Error("IndexedDB error"));
