@@ -1,70 +1,28 @@
 "use client";
 
 import { Settings } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  replaceItem,
-  rollbackItemMutation,
-  toggleItemOptimistically,
-  type Item,
-} from "@/features/dashboard/item-state";
+import type { Item } from "@/features/dashboard/item-state";
 import { ItemList } from "@/features/dashboard/components/item-list";
 import { ItemModal } from "@/features/dashboard/components/item-modal";
 import { Sidebar } from "@/features/dashboard/components/sidebar";
 import { ListSettingsModal } from "@/features/dashboard/components/list-settings-modal";
-import { readItemCache, writeItemCache } from "@/features/dashboard/item-cache";
+import {
+  useDashboardListsQuery,
+  useDashboardMutations,
+  useInvitationsQuery,
+  useItemsQuery,
+  useListDetailsQuery,
+} from "@/features/dashboard/dashboard-queries";
+import { clearItemCacheForUser } from "@/features/dashboard/item-cache";
 
-type ShoppingList = { id: string; name: string };
-type ListDetails = { id: string; name: string; created_by: string };
-type Member = {
-  user_id: string;
-  joined_at: string;
-  users: {
-    id: string;
-    display_name: string | null;
-    avatar_url: string | null;
-    email: string | null;
-  } | null;
-};
-type Invitation = {
+const emptyLists: { id: string; name: string }[] = [];
+const emptyInvitations: {
   id: string;
-  email: string;
-  expiresAt: string;
-  createdAt: string;
   list: { name: string } | null;
-};
-
-async function getRequestError(response: Response, fallback: string) {
-  try {
-    const data = (await response.json()) as { error?: string; code?: string };
-    return data.code
-      ? `${data.error ?? fallback} (${data.code})`
-      : (data.error ?? fallback);
-  } catch {
-    return fallback;
-  }
-}
-
-async function requestJson<T>(
-  input: RequestInfo | URL,
-  init: RequestInit,
-  fallback: string,
-) {
-  let response: Response;
-  try {
-    response = await fetch(input, init);
-  } catch {
-    throw new Error("通信に失敗しました。接続を確認してください");
-  }
-  if (!response.ok) {
-    throw new Error(await getRequestError(response, fallback));
-  }
-  try {
-    return (await response.json()) as T;
-  } catch {
-    throw new Error(fallback);
-  }
-}
+}[] = [];
+const emptyItems: Item[] = [];
 
 export function Dashboard({
   email,
@@ -73,9 +31,7 @@ export function Dashboard({
   email: string;
   userId: string;
 }) {
-  const [lists, setLists] = useState<ShoppingList[]>([]);
   const [selectedListId, setSelectedListId] = useState("");
-  const [items, setItems] = useState<Item[]>([]);
   const [showCompleted, setShowCompleted] = useState(false);
   const [listName, setListName] = useState("");
   const [itemTitle, setItemTitle] = useState("");
@@ -83,493 +39,274 @@ export function Dashboard({
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [isListModalOpen, setIsListModalOpen] = useState(false);
-  const [isCreatingList, setIsCreatingList] = useState(false);
-  const [isCreatingItem, setIsCreatingItem] = useState(false);
-  const [isSavingList, setIsSavingList] = useState(false);
-  const [isManagingMember, setIsManagingMember] = useState(false);
-  const [busyItemIds, setBusyItemIds] = useState<string[]>([]);
+  const [itemModalListId, setItemModalListId] = useState<string | null>(null);
+  const [listModalListId, setListModalListId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [itemError, setItemError] = useState("");
-  const [isLoadingItems, setIsLoadingItems] = useState(false);
-  const [isRefreshingItems, setIsRefreshingItems] = useState(false);
-  const [hasLoadedItemCache, setHasLoadedItemCache] = useState(false);
   const [listError, setListError] = useState("");
   const [editingItem, setEditingItem] = useState<Item | null>(null);
-  const [listDetails, setListDetails] = useState<ListDetails | null>(null);
-  const [members, setMembers] = useState<Member[]>([]);
   const [editedListName, setEditedListName] = useState("");
+  const [hasEditedListName, setHasEditedListName] = useState(false);
   const [memberEmail, setMemberEmail] = useState("");
   const [inviteMessage, setInviteMessage] = useState("");
   const [invitationUrl, setInvitationUrl] = useState("");
-  const [invitations, setInvitations] = useState<Invitation[]>([]);
-  const itemsRef = useRef(items);
-  const itemsRequestId = useRef(0);
   const itemTitleInput = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
   const lastListKey = `iru-mono:last-list:${userId}`;
-
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
-
-  const loadLists = useCallback(async () => {
-    const response = await fetch("/lists");
-    if (!response.ok) throw new Error("リストを取得できませんでした");
-    const data = (await response.json()) as { lists: ShoppingList[] };
-    const savedListId = localStorage.getItem(lastListKey);
-    const initialListId = data.lists.some((list) => list.id === savedListId)
-      ? (savedListId ?? "")
-      : data.lists[0]?.id || "";
-    setLists(data.lists);
-    setSelectedListId((current) => current || initialListId);
-  }, [lastListKey]);
-
-  const loadItems = useCallback(
-    async (listId: string) => {
-      const requestId = ++itemsRequestId.current;
-      setItemError("");
-      setIsLoadingItems(true);
-      setIsRefreshingItems(false);
-      setHasLoadedItemCache(false);
-      itemsRef.current = [];
-      setItems([]);
-      if (!listId) {
-        setIsLoadingItems(false);
-        return;
-      }
-      try {
-        const cachedItems = await readItemCache(userId, listId);
-        if (requestId !== itemsRequestId.current) return;
-        if (cachedItems) {
-          itemsRef.current = cachedItems;
-          setItems(cachedItems);
-          setHasLoadedItemCache(true);
-          setIsRefreshingItems(true);
-        }
-
-        const pageSize = 100;
-        const allItems: Item[] = [];
-        let offset = 0;
-        let total = 0;
-        do {
-          const data = await requestJson<{
-            items: Item[];
-            pagination: { total: number };
-          }>(
-            `/lists/${listId}/items?status=all&limit=${pageSize}&offset=${offset}`,
-            {},
-            "アイテムを取得できませんでした",
-          );
-          allItems.push(...data.items);
-          total = data.pagination.total;
-          offset += data.items.length;
-          if (!data.items.length) break;
-        } while (offset < total);
-        if (requestId === itemsRequestId.current) {
-          itemsRef.current = allItems;
-          setItems(allItems);
-          await writeItemCache(userId, listId, allItems);
-        }
-      } catch (cause) {
-        if (requestId === itemsRequestId.current) {
-          setItemError(
-            cause instanceof Error
-              ? cause.message
-              : "アイテムを取得できませんでした",
-          );
-        }
-        throw cause;
-      } finally {
-        if (requestId === itemsRequestId.current) {
-          setIsLoadingItems(false);
-          setIsRefreshingItems(false);
-        }
-      }
-    },
-    [userId],
-  );
-
-  async function loadListDetails(listId: string) {
-    const response = await fetch(`/lists/${listId}`);
-    if (!response.ok)
-      throw new Error(
-        await getRequestError(response, "リスト情報を取得できませんでした"),
-      );
-    const data = (await response.json()) as {
-      list: ListDetails;
-      members: Member[];
-    };
-    setListDetails(data.list);
-    setMembers(data.members);
-    setEditedListName(data.list.name);
-  }
-
-  useEffect(() => {
-    let active = true;
-
-    void (async () => {
-      try {
-        await loadLists();
-      } catch (cause) {
-        if (active && cause instanceof Error) {
-          setError(cause.message);
-        }
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [loadLists]);
-
-  useEffect(() => {
-    let active = true;
-
-    void (async () => {
-      const response = await fetch("/invitations");
-      if (!response.ok || !active) return;
-      const data = (await response.json()) as { invitations: Invitation[] };
-      if (active) setInvitations(data.invitations);
-    })();
-
-    return () => {
-      active = false;
-    };
+  const closeListModal = useCallback(() => {
+    setIsListModalOpen(false);
+    setEditedListName("");
+    setHasEditedListName(false);
+    setListModalListId(null);
   }, []);
 
+  const listsQuery = useDashboardListsQuery(userId);
+  const invitationsQuery = useInvitationsQuery(userId);
+  const lists = listsQuery.data ?? emptyLists;
+  const selectableLists = lists.filter(
+    (list) => !list.id.startsWith("optimistic-"),
+  );
+  const invitations = invitationsQuery.data ?? emptyInvitations;
+  const savedListId =
+    typeof window === "undefined" ? null : localStorage.getItem(lastListKey);
+  const activeListId =
+    selectedListId &&
+    selectableLists.some((list) => list.id === selectedListId)
+      ? selectedListId
+      : selectableLists.some((list) => list.id === savedListId)
+        ? (savedListId ?? "")
+        : (selectableLists[0]?.id ?? "");
+  const [previousActiveListId, setPreviousActiveListId] =
+    useState(activeListId);
+  if (previousActiveListId !== activeListId) {
+    setPreviousActiveListId(activeListId);
+    if (itemModalListId && itemModalListId !== activeListId) {
+      setIsItemModalOpen(false);
+      setEditingItem(null);
+      setItemTitle("");
+      setQuantity(1);
+      setItemError("");
+      setItemModalListId(null);
+    }
+    // 操作中に非表示にしたモーダルは、失敗時の復元用に対象IDを保持する
+    if (isListModalOpen && listModalListId !== activeListId) {
+      closeListModal();
+    }
+  }
+  const isItemModalForActiveList =
+    isItemModalOpen && itemModalListId === activeListId;
+  const isListModalForActiveList =
+    isListModalOpen && listModalListId === activeListId;
+  const itemsQuery = useItemsQuery(userId, activeListId);
+  const detailsQuery = useListDetailsQuery(
+    userId,
+    isListModalForActiveList ? activeListId : "",
+  );
+  const mutations = useDashboardMutations(userId);
+  const items = itemsQuery.data ?? emptyItems;
+  const listDetails = detailsQuery.data?.list ?? null;
+  const members = detailsQuery.data?.members ?? [];
+  const effectiveEditedListName = hasEditedListName
+    ? editedListName
+    : (listDetails?.name ?? editedListName);
+  const isCreatingList = mutations.createList.isPending;
+  const isCreatingItem = mutations.saveItem.isPending;
+  const isSavingList =
+    mutations.updateList.isPending || mutations.deleteList.isPending;
+  const isManagingMember =
+    mutations.createInvitation.isPending ||
+    mutations.removeMember.isPending ||
+    mutations.leaveList.isPending;
+  const busyItemIds = mutations.pendingItemIds
+    .filter((mutation) => mutation.listId === activeListId)
+    .map((mutation) => mutation.itemId);
+
   useEffect(() => {
-    void (async () => {
-      try {
-        await loadItems(selectedListId);
-      } catch {}
-    })();
-  }, [loadItems, selectedListId]);
-  useEffect(() => {
-    if (selectedListId) localStorage.setItem(lastListKey, selectedListId);
-  }, [selectedListId, lastListKey]);
+    if (activeListId) localStorage.setItem(lastListKey, activeListId);
+  }, [activeListId, lastListKey]);
+
   useEffect(() => {
     if (isItemModalOpen) itemTitleInput.current?.focus();
   }, [isItemModalOpen]);
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       if (!isCreatingItem) setIsItemModalOpen(false);
-      if (!isSavingList && !isManagingMember) setIsListModalOpen(false);
+      if (!isSavingList && !isManagingMember) closeListModal();
       setIsSidebarOpen(false);
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isCreatingItem, isManagingMember, isSavingList]);
+  }, [closeListModal, isCreatingItem, isManagingMember, isSavingList]);
 
   function selectList(listId: string) {
+    if (listId.startsWith("optimistic-")) return;
     setSelectedListId(listId);
     setIsSidebarOpen(false);
     setError("");
+    setItemError("");
   }
 
   function openItemModal(item?: Item) {
+    if (itemsQuery.isPending) return;
     setItemError("");
     setEditingItem(item ?? null);
     setItemTitle(item?.title ?? "");
     setQuantity(item?.quantity ?? 1);
+    setItemModalListId(activeListId);
     setIsItemModalOpen(true);
   }
 
   function closeItemModal() {
-    if (isCreatingItem) return;
-    setIsItemModalOpen(false);
+    if (!isCreatingItem) {
+      setIsItemModalOpen(false);
+      setItemModalListId(null);
+    }
   }
 
   function openListModal() {
-    if (!selectedListId) return;
+    if (!activeListId) return;
     setListError("");
-    setListDetails(null);
-    setMembers([]);
+    setEditedListName("");
+    setHasEditedListName(false);
+    setListModalListId(activeListId);
     setIsListModalOpen(true);
-    loadListDetails(selectedListId).catch((cause: Error) =>
-      setListError(cause.message),
-    );
   }
 
   async function createList(event: React.FormEvent) {
     event.preventDefault();
     if (isCreatingList) return;
-    setIsCreatingList(true);
     setError("");
-    const optimisticId = `optimistic-${crypto.randomUUID()}`;
-    const optimisticList = { id: optimisticId, name: listName.trim() };
-    setLists((current) => [optimisticList, ...current]);
     try {
-      const response = await fetch("/lists", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: listName }),
-      });
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(response, "リストを作成できませんでした"),
-        );
-      const data = (await response.json()) as { list: ShoppingList };
-      setLists((current) =>
-        current.map((list) => (list.id === optimisticId ? data.list : list)),
-      );
-      selectList(data.list.id);
+      const list = await mutations.createList.mutateAsync(listName);
       setListName("");
+      selectList(list.id);
     } catch (cause) {
-      setLists((current) => current.filter((list) => list.id !== optimisticId));
       setError(
         cause instanceof Error ? cause.message : "リストを作成できませんでした",
       );
-    } finally {
-      setIsCreatingList(false);
     }
   }
 
   async function saveItem(event: React.FormEvent) {
     event.preventDefault();
-    if (!selectedListId || isCreatingItem) return;
-    setIsCreatingItem(true);
+    const itemListId = itemModalListId;
+    if (
+      !itemListId ||
+      itemListId !== activeListId ||
+      !selectableLists.some((list) => list.id === itemListId) ||
+      itemsQuery.isPending ||
+      isCreatingItem
+    )
+      return;
     setItemError("");
-    const listId = selectedListId;
-    const itemBeingEdited = editingItem;
-    const optimisticId = `optimistic-${crypto.randomUUID()}`;
-    const previousItems = itemsRef.current;
-    const optimisticItem: Item = {
-      id: optimisticId,
-      title: itemTitle.trim(),
-      quantity,
-      is_completed: false,
-    };
     try {
-      if (!itemBeingEdited) {
-        const nextItems = [optimisticItem, ...itemsRef.current];
-        itemsRef.current = nextItems;
-        setItems(nextItems);
-      } else {
-        const nextItems = replaceItem(itemsRef.current, itemBeingEdited.id, {
-          ...itemBeingEdited,
-          title: itemTitle.trim(),
+      await mutations.saveItem.mutateAsync({
+        listId: itemListId,
+        item: {
+          id: editingItem?.id,
+          title: itemTitle,
           quantity,
-        });
-        itemsRef.current = nextItems;
-        setItems(nextItems);
-      }
-      const data = await requestJson<{ item: Item }>(
-        itemBeingEdited
-          ? `/lists/${listId}/items/${itemBeingEdited.id}`
-          : `/lists/${listId}/items`,
-        {
-          method: itemBeingEdited ? "PUT" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: itemTitle, quantity }),
         },
-        itemBeingEdited
-          ? "アイテムを編集できませんでした"
-          : "アイテムを追加できませんでした",
-      );
-      if (!itemBeingEdited) {
-        const nextItems = replaceItem(
-          itemsRef.current,
-          optimisticId,
-          data.item,
-        );
-        itemsRef.current = nextItems;
-        setItems(nextItems);
-      } else {
-        const nextItems = replaceItem(
-          itemsRef.current,
-          itemBeingEdited.id,
-          data.item,
-        );
-        itemsRef.current = nextItems;
-        setItems(nextItems);
-      }
+      });
       setItemTitle("");
       setQuantity(1);
       setEditingItem(null);
+      setItemModalListId(null);
       setIsItemModalOpen(false);
-      await writeItemCache(userId, listId, itemsRef.current);
-      await loadItems(selectedListId);
     } catch (cause) {
-      if (!itemBeingEdited) {
-        const nextItems = itemsRef.current.filter(
-          (item) => item.id !== optimisticId,
-        );
-        itemsRef.current = nextItems;
-        setItems(nextItems);
-      } else {
-        itemsRef.current = previousItems;
-        setItems(previousItems);
-      }
       setItemError(
         cause instanceof Error
           ? cause.message
-          : "アイテムを追加できませんでした",
+          : editingItem
+            ? "アイテムを編集できませんでした"
+            : "アイテムを追加できませんでした",
       );
-    } finally {
-      setIsCreatingItem(false);
     }
   }
 
   async function toggleItem(itemId: string) {
-    if (busyItemIds.includes(itemId)) return;
-    const optimistic = toggleItemOptimistically(itemsRef.current, itemId);
-    if (!optimistic.snapshot) return;
-    itemsRef.current = optimistic.items;
-    setItems(optimistic.items);
-    setBusyItemIds((current) => [...current, itemId]);
-    setError("");
+    if (!activeListId || busyItemIds.includes(itemId)) return;
+    setItemError("");
     try {
-      const data = await requestJson<{ item: Item }>(
-        `/lists/${selectedListId}/items/${itemId}/toggle`,
-        { method: "PATCH" },
-        "アイテムの状態を変更できませんでした",
-      );
-      const nextItems = replaceItem(itemsRef.current, itemId, data.item);
-      itemsRef.current = nextItems;
-      setItems(nextItems);
-      void writeItemCache(userId, selectedListId, nextItems);
+      await mutations.toggleItem.mutateAsync({ listId: activeListId, itemId });
     } catch (cause) {
-      const nextItems = rollbackItemMutation(
-        itemsRef.current,
-        optimistic.snapshot,
-      );
-      itemsRef.current = nextItems;
-      setItems(nextItems);
-      setError(
+      setItemError(
         cause instanceof Error
           ? cause.message
           : "アイテムの状態を変更できませんでした",
       );
-    } finally {
-      setBusyItemIds((current) => current.filter((id) => id !== itemId));
     }
   }
 
   async function deleteItem(item: Item) {
     if (
+      !activeListId ||
       busyItemIds.includes(item.id) ||
       !window.confirm(`「${item.title}」を削除しますか？`)
     )
       return;
-    const itemIndex = itemsRef.current.findIndex(
-      (current) => current.id === item.id,
-    );
-    const nextItems = itemsRef.current.filter(
-      (current) => current.id !== item.id,
-    );
-    itemsRef.current = nextItems;
-    setItems(nextItems);
-    setBusyItemIds((current) => [...current, item.id]);
-    setError("");
+    setItemError("");
     try {
-      const response = await fetch(
-        `/lists/${selectedListId}/items/${item.id}`,
-        { method: "DELETE" },
-      );
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(response, "アイテムを削除できませんでした"),
-        );
-      void writeItemCache(userId, selectedListId, nextItems);
+      await mutations.deleteItem.mutateAsync({
+        listId: activeListId,
+        itemId: item.id,
+      });
     } catch (cause) {
-      const restoredItems = [...itemsRef.current];
-      restoredItems.splice(itemIndex, 0, item);
-      itemsRef.current = restoredItems;
-      setItems(restoredItems);
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "アイテムを削除できませんでした",
+      setItemError(
+        cause instanceof Error ? cause.message : "アイテムを削除できませんでした",
       );
-    } finally {
-      setBusyItemIds((current) => current.filter((id) => id !== item.id));
     }
   }
 
   async function updateList(event: React.FormEvent) {
     event.preventDefault();
-    if (!selectedListId || isSavingList) return;
-    setIsSavingList(true);
+    const listId = listModalListId;
+    if (
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
+      isSavingList
+    )
+      return;
     setListError("");
-    const previousName = lists.find((list) => list.id === selectedListId)?.name;
-    const nextName = editedListName.trim();
-    setLists((current) =>
-      current.map((list) =>
-        list.id === selectedListId ? { ...list, name: nextName } : list,
-      ),
-    );
-    setListDetails((current) =>
-      current ? { ...current, name: nextName } : current,
-    );
     try {
-      const response = await fetch(`/lists/${selectedListId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: editedListName }),
+      await mutations.updateList.mutateAsync({
+        listId,
+        name: effectiveEditedListName,
       });
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(response, "リスト名を変更できませんでした"),
-        );
-      const data = (await response.json()) as { list: ShoppingList };
-      setLists((current) =>
-        current.map((list) =>
-          list.id === data.list.id ? { ...list, name: data.list.name } : list,
-        ),
-      );
-      setListDetails((current) =>
-        current ? { ...current, name: data.list.name } : current,
-      );
     } catch (cause) {
-      if (previousName !== undefined) {
-        setLists((current) =>
-          current.map((list) =>
-            list.id === selectedListId ? { ...list, name: previousName } : list,
-          ),
-        );
-        setListDetails((current) =>
-          current ? { ...current, name: previousName } : current,
-        );
-        setEditedListName(previousName);
-      }
       setListError(
-        cause instanceof Error
-          ? cause.message
-          : "リスト名を変更できませんでした",
+        cause instanceof Error ? cause.message : "リスト名を変更できませんでした",
       );
-    } finally {
-      setIsSavingList(false);
     }
   }
 
   async function addMember(event: React.FormEvent) {
     event.preventDefault();
-    if (!selectedListId || isManagingMember) return;
-    setIsManagingMember(true);
+    const listId = listModalListId;
+    if (
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
+      isManagingMember
+    )
+      return;
     setListError("");
     setInviteMessage("");
     try {
-      const response = await fetch(`/lists/${selectedListId}/members`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: memberEmail }),
+      const invitation = await mutations.createInvitation.mutateAsync({
+        listId,
+        email: memberEmail,
       });
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(response, "招待を送信できませんでした"),
-        );
-      const data = (await response.json()) as {
-        invitation: { url: string };
-      };
       setMemberEmail("");
-      setInvitationUrl(data.invitation.url);
+      setInvitationUrl(invitation.url);
       setInviteMessage("招待リンクを発行しました");
     } catch (cause) {
       setListError(
         cause instanceof Error ? cause.message : "招待を送信できませんでした",
       );
-    } finally {
-      setIsManagingMember(false);
     }
   }
 
@@ -584,113 +321,101 @@ export function Dashboard({
   }
 
   async function removeMember(memberId: string) {
+    const listId = listModalListId;
     if (
-      !selectedListId ||
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
       isManagingMember ||
       !window.confirm("このメンバーを除外しますか？")
     )
       return;
-    setIsManagingMember(true);
     setListError("");
     try {
-      const response = await fetch(
-        `/lists/${selectedListId}/members/${memberId}`,
-        { method: "DELETE" },
-      );
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(response, "メンバーを除外できませんでした"),
-        );
-      await loadListDetails(selectedListId);
+      await mutations.removeMember.mutateAsync({
+        listId,
+        memberId,
+      });
     } catch (cause) {
       setListError(
-        cause instanceof Error
-          ? cause.message
-          : "メンバーを除外できませんでした",
+        cause instanceof Error ? cause.message : "メンバーを除外できませんでした",
       );
-    } finally {
-      setIsManagingMember(false);
     }
   }
 
   async function leaveList() {
+    const listId = listModalListId;
     if (
-      !selectedListId ||
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
       isManagingMember ||
       !window.confirm("このリストから退会しますか？")
     )
       return;
-    setIsManagingMember(true);
+    const leavingListId = listId;
     setListError("");
-    const leavingListId = selectedListId;
-    const previousLists = lists;
-    setLists((current) => current.filter((list) => list.id !== leavingListId));
     setSelectedListId("");
     setIsListModalOpen(false);
     try {
-      const response = await fetch(`/lists/${leavingListId}/membership`, {
-        method: "DELETE",
-      });
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(response, "リストから退会できませんでした"),
-        );
+      await mutations.leaveList.mutateAsync(leavingListId);
       localStorage.removeItem(lastListKey);
-      await loadLists();
+      closeListModal();
     } catch (cause) {
-      setLists(previousLists);
       setSelectedListId(leavingListId);
       setIsListModalOpen(true);
       setListError(
-        cause instanceof Error
-          ? cause.message
-          : "リストから退会できませんでした",
+        cause instanceof Error ? cause.message : "リストから退会できませんでした",
       );
-    } finally {
-      setIsManagingMember(false);
     }
   }
 
   async function deleteList() {
+    const listId = listModalListId;
     if (
-      !selectedListId ||
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
       isSavingList ||
       !window.confirm(
         "このリストと全アイテムを削除しますか？この操作は取り消せません。",
       )
     )
       return;
-    setIsSavingList(true);
+    const deletingListId = listId;
     setListError("");
-    const deletingListId = selectedListId;
-    const previousLists = lists;
-    setLists((current) => current.filter((list) => list.id !== deletingListId));
     setSelectedListId("");
     setIsListModalOpen(false);
     try {
-      const response = await fetch(`/lists/${deletingListId}`, {
-        method: "DELETE",
-      });
-      if (!response.ok)
-        throw new Error(
-          await getRequestError(response, "リストを削除できませんでした"),
-        );
+      await mutations.deleteList.mutateAsync(deletingListId);
       localStorage.removeItem(lastListKey);
-      await loadLists();
+      closeListModal();
     } catch (cause) {
-      setLists(previousLists);
       setSelectedListId(deletingListId);
       setIsListModalOpen(true);
       setListError(
         cause instanceof Error ? cause.message : "リストを削除できませんでした",
       );
-    } finally {
-      setIsSavingList(false);
     }
   }
 
   async function logout() {
-    await fetch("/auth/logout", { method: "POST" });
+    const response = await fetch("/auth/logout", { method: "POST" });
+    if (!response.ok) {
+      setError("ログアウトできませんでした");
+      return;
+    }
+    queryClient.clear();
+    try {
+      await clearItemCacheForUser(userId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? `ログアウト時にローカルキャッシュを削除できませんでした: ${cause.message}`
+          : "ログアウト時にローカルキャッシュを削除できませんでした",
+      );
+      return;
+    }
     window.location.reload();
   }
 
@@ -728,7 +453,7 @@ export function Dashboard({
       <div className="workspace">
         <Sidebar
           lists={lists}
-          selectedListId={selectedListId}
+          selectedListId={activeListId}
           listName={listName}
           isSidebarOpen={isSidebarOpen}
           isCreatingList={isCreatingList}
@@ -755,11 +480,11 @@ export function Dashboard({
             <div>
               <p className="eyebrow">YOUR LIST</p>
               <h2>
-                {lists.find((list) => list.id === selectedListId)?.name ||
+                {lists.find((list) => list.id === activeListId)?.name ||
                   "リストを作成してください"}
               </h2>
             </div>
-            {selectedListId && (
+            {activeListId && (
               <div className="heading-actions">
                 <div className="segmented">
                   <button
@@ -786,15 +511,25 @@ export function Dashboard({
               </div>
             )}
           </div>
-          {selectedListId ? (
+          {activeListId ? (
             <ItemList
               items={items.filter(
                 (item) => item.is_completed === showCompleted,
               )}
               showCompleted={showCompleted}
-              isLoading={isLoadingItems && !hasLoadedItemCache}
-              isRefreshing={isRefreshingItems}
-              error={itemError}
+              isLoading={
+                (itemsQuery.isCacheRestoring || itemsQuery.isPending) &&
+                !itemsQuery.data
+              }
+              isRefreshing={itemsQuery.isFetching && Boolean(items.length)}
+              error={
+                itemError ||
+                (itemsQuery.error instanceof Error
+                  ? itemsQuery.error.message
+                  : itemsQuery.error
+                    ? "アイテムを取得できませんでした"
+                    : "")
+              }
               busyItemIds={busyItemIds}
               onToggle={toggleItem}
               onEdit={openItemModal}
@@ -806,14 +541,17 @@ export function Dashboard({
               <p>リストを作成してください</p>
             </div>
           )}
-          {error && (
+          {(error || listsQuery.error) && (
             <p className="error-message" role="alert">
-              {error}
+              {error ||
+                (listsQuery.error instanceof Error
+                  ? listsQuery.error.message
+                  : "リストを取得できませんでした")}
             </p>
           )}
         </section>
       </div>
-      {selectedListId && !showCompleted && (
+      {activeListId && !showCompleted && (
         <button
           className="item-fab"
           onClick={() => openItemModal()}
@@ -823,7 +561,7 @@ export function Dashboard({
           +
         </button>
       )}
-      {isItemModalOpen && (
+      {isItemModalForActiveList && (
         <ItemModal
           editingItem={editingItem}
           itemTitle={itemTitle}
@@ -837,21 +575,24 @@ export function Dashboard({
           onQuantityChange={setQuantity}
         />
       )}
-      {isListModalOpen && (
+      {isListModalForActiveList && (
         <ListSettingsModal
           userId={userId}
           listDetails={listDetails}
           members={members}
-          editedListName={editedListName}
+          editedListName={effectiveEditedListName}
           memberEmail={memberEmail}
-          listError={listError}
+          listError={listError || (detailsQuery.error instanceof Error ? detailsQuery.error.message : "")}
           inviteMessage={inviteMessage}
           invitationUrl={invitationUrl}
           isSavingList={isSavingList}
           isManagingMember={isManagingMember}
-          onClose={() => setIsListModalOpen(false)}
+          onClose={closeListModal}
           onUpdateList={updateList}
-          onEditedListNameChange={setEditedListName}
+          onEditedListNameChange={(value) => {
+            setHasEditedListName(true);
+            setEditedListName(value);
+          }}
           onAddMember={addMember}
           onMemberEmailChange={setMemberEmail}
           onCopyInvitation={copyInvitation}

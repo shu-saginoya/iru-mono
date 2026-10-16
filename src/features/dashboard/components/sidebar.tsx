@@ -47,6 +47,7 @@ export function Sidebar({
               list.id === selectedListId ? "list-link active" : "list-link"
             }
             key={list.id}
+            disabled={list.id.startsWith("optimistic-")}
             onClick={() => onSelectList(list.id)}
           >
             {list.name}
