@@ -7,7 +7,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { readItemCache, writeItemCache } from "@/features/dashboard/item-cache";
 import type { Item } from "@/features/dashboard/item-state";
 
@@ -136,7 +136,10 @@ export async function fetchAllItems(
     throw new DOMException("The operation was aborted", "AbortError");
   }
 
-  await writeItemCache(userId, listId, items);
+  await writeItemCache(userId, listId, items, signal);
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted", "AbortError");
+  }
   return items;
 }
 
@@ -152,6 +155,7 @@ async function invalidateAfterMutationsSettle(
   mutationKey: readonly unknown[],
   queryKey: readonly unknown[],
   matchesVariables: (variables: unknown) => boolean = () => true,
+  afterInvalidation?: () => Promise<void>,
 ) {
   const countPendingMutations = () =>
     queryClient
@@ -170,6 +174,7 @@ async function invalidateAfterMutationsSettle(
       exact: true,
       refetchType: "all",
     });
+    if (countPendingMutations() <= 1) await afterInvalidation?.();
     return;
   }
 
@@ -180,6 +185,7 @@ async function invalidateAfterMutationsSettle(
       exact: true,
       refetchType: "all",
     });
+    if (countPendingMutations() <= 1) await afterInvalidation?.();
   }
 }
 
@@ -272,6 +278,17 @@ function withItems(
   return previousItems;
 }
 
+export async function persistItemsFromQueryCache(
+  queryClient: QueryClient,
+  userId: string,
+  listId: string,
+) {
+  const items = queryClient.getQueryData<Item[]>(
+    dashboardQueryKeys.items(userId, listId),
+  );
+  if (items !== undefined) await writeItemCache(userId, listId, items);
+}
+
 export function useDashboardListsQuery(userId: string) {
   return useQuery({
     queryKey: dashboardQueryKeys.lists(userId),
@@ -312,6 +329,10 @@ export function useListDetailsQuery(userId: string, listId: string) {
 export function useItemsQuery(userId: string, listId: string) {
   const queryClient = useQueryClient();
   const queryKey = dashboardQueryKeys.items(userId, listId);
+  const cacheIdentity = JSON.stringify([userId, listId]);
+  const [restoredCacheIdentity, setRestoredCacheIdentity] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     let active = true;
@@ -322,20 +343,25 @@ export function useItemsQuery(userId: string, listId: string) {
       if (active && cachedItems && !queryClient.getQueryData(cacheKey)) {
         queryClient.setQueryData(cacheKey, cachedItems);
       }
+      if (active) setRestoredCacheIdentity(cacheIdentity);
     });
 
     return () => {
       active = false;
     };
-  }, [listId, queryClient, userId]);
+  }, [cacheIdentity, listId, queryClient, userId]);
 
   const query = useQuery({
     queryKey,
     queryFn: ({ signal }) => fetchAllItems(userId, listId, signal),
-    enabled: Boolean(listId),
+    enabled: Boolean(listId) && restoredCacheIdentity === cacheIdentity,
   });
 
-  return query;
+  return {
+    ...query,
+    isCacheRestoring:
+      Boolean(listId) && restoredCacheIdentity !== cacheIdentity,
+  };
 }
 
 export function useDashboardMutations(userId: string) {
@@ -475,6 +501,7 @@ export function useDashboardMutations(userId: string) {
         dashboardQueryKeys.items(userId, variables.listId),
         (pendingVariables) =>
           mutationHasListId(pendingVariables, variables.listId),
+        () => persistItemsFromQueryCache(queryClient, userId, variables.listId),
       ),
   });
 
@@ -519,6 +546,7 @@ export function useDashboardMutations(userId: string) {
         dashboardQueryKeys.items(userId, variables.listId),
         (pendingVariables) =>
           mutationHasListId(pendingVariables, variables.listId),
+        () => persistItemsFromQueryCache(queryClient, userId, variables.listId),
       ),
   });
 
@@ -561,6 +589,7 @@ export function useDashboardMutations(userId: string) {
         dashboardQueryKeys.items(userId, variables.listId),
         (pendingVariables) =>
           mutationHasListId(pendingVariables, variables.listId),
+        () => persistItemsFromQueryCache(queryClient, userId, variables.listId),
       ),
   });
 

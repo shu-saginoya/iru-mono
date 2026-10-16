@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
 import * as itemCache from "./item-cache";
 import {
   dashboardQueryKeys,
   fetchAllItems,
+  persistItemsFromQueryCache,
   rollbackItemCreate,
   rollbackItemDelete,
   rollbackItemEdit,
@@ -98,6 +100,56 @@ describe("fetchAllItems", () => {
       fetchAllItems("user-a", "list-1", controller.signal),
     ).rejects.toThrow(/AbortError|aborted/i);
     expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not return data when the fetch is aborted during cache persistence", async () => {
+    const controller = new AbortController();
+    const writeSpy = vi
+      .spyOn(itemCache, "writeItemCache")
+      .mockImplementation(async () => {
+        controller.abort();
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          items: [{ id: "item-1", title: "milk", quantity: 1, is_completed: false }],
+          pagination: { total: 1 },
+        }),
+      }),
+    );
+
+    await expect(
+      fetchAllItems("user-a", "list-1", controller.signal),
+    ).rejects.toThrow(/AbortError|aborted/i);
+    expect(writeSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe("persistItemsFromQueryCache", () => {
+  it("persists the settled query data for its user and list", async () => {
+    const queryClient = new QueryClient();
+    const items: Item[] = [
+      { id: "item-1", title: "milk", quantity: 1, is_completed: false },
+    ];
+    queryClient.setQueryData(dashboardQueryKeys.items("user-a", "list-1"), items);
+    const writeSpy = vi.spyOn(itemCache, "writeItemCache").mockResolvedValue();
+
+    await persistItemsFromQueryCache(queryClient, "user-a", "list-1");
+
+    expect(writeSpy).toHaveBeenCalledWith("user-a", "list-1", items);
+    queryClient.clear();
+  });
+
+  it("does not overwrite persistent data when the query has no data", async () => {
+    const queryClient = new QueryClient();
+    const writeSpy = vi.spyOn(itemCache, "writeItemCache").mockResolvedValue();
+
+    await persistItemsFromQueryCache(queryClient, "user-a", "list-1");
+
+    expect(writeSpy).not.toHaveBeenCalled();
+    queryClient.clear();
   });
 });
 

@@ -2,7 +2,7 @@
 
 import { Settings } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Item } from "@/features/dashboard/item-state";
 import { ItemList } from "@/features/dashboard/components/item-list";
 import { ItemModal } from "@/features/dashboard/components/item-modal";
@@ -39,6 +39,8 @@ export function Dashboard({
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [isListModalOpen, setIsListModalOpen] = useState(false);
+  const [itemModalListId, setItemModalListId] = useState<string | null>(null);
+  const [listModalListId, setListModalListId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [itemError, setItemError] = useState("");
   const [listError, setListError] = useState("");
@@ -49,9 +51,14 @@ export function Dashboard({
   const [inviteMessage, setInviteMessage] = useState("");
   const [invitationUrl, setInvitationUrl] = useState("");
   const itemTitleInput = useRef<HTMLInputElement>(null);
-  const itemModalListIdRef = useRef<string | null>(null);
   const queryClient = useQueryClient();
   const lastListKey = `iru-mono:last-list:${userId}`;
+  const closeListModal = useCallback(() => {
+    setIsListModalOpen(false);
+    setEditedListName("");
+    setHasEditedListName(false);
+    setListModalListId(null);
+  }, []);
 
   const listsQuery = useDashboardListsQuery(userId);
   const invitationsQuery = useInvitationsQuery(userId);
@@ -69,10 +76,30 @@ export function Dashboard({
       : selectableLists.some((list) => list.id === savedListId)
         ? (savedListId ?? "")
         : (selectableLists[0]?.id ?? "");
+  const [previousActiveListId, setPreviousActiveListId] =
+    useState(activeListId);
+  if (previousActiveListId !== activeListId) {
+    setPreviousActiveListId(activeListId);
+    if (itemModalListId && itemModalListId !== activeListId) {
+      setIsItemModalOpen(false);
+      setEditingItem(null);
+      setItemTitle("");
+      setQuantity(1);
+      setItemError("");
+      setItemModalListId(null);
+    }
+    if (listModalListId && listModalListId !== activeListId) {
+      closeListModal();
+    }
+  }
+  const isItemModalForActiveList =
+    isItemModalOpen && itemModalListId === activeListId;
+  const isListModalForActiveList =
+    isListModalOpen && listModalListId === activeListId;
   const itemsQuery = useItemsQuery(userId, activeListId);
   const detailsQuery = useListDetailsQuery(
     userId,
-    isListModalOpen ? activeListId : "",
+    isListModalForActiveList ? activeListId : "",
   );
   const mutations = useDashboardMutations(userId);
   const items = itemsQuery.data ?? emptyItems;
@@ -102,27 +129,15 @@ export function Dashboard({
   }, [isItemModalOpen]);
 
   useEffect(() => {
-    if (!isItemModalOpen || !itemModalListIdRef.current) return;
-    if (itemModalListIdRef.current !== activeListId) {
-      setIsItemModalOpen(false);
-      setEditingItem(null);
-      setItemTitle("");
-      setQuantity(1);
-      setItemError("");
-      itemModalListIdRef.current = null;
-    }
-  }, [activeListId, isItemModalOpen]);
-
-  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       if (!isCreatingItem) setIsItemModalOpen(false);
-      if (!isSavingList && !isManagingMember) setIsListModalOpen(false);
+      if (!isSavingList && !isManagingMember) closeListModal();
       setIsSidebarOpen(false);
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isCreatingItem, isManagingMember, isSavingList]);
+  }, [closeListModal, isCreatingItem, isManagingMember, isSavingList]);
 
   function selectList(listId: string) {
     if (listId.startsWith("optimistic-")) return;
@@ -133,18 +148,19 @@ export function Dashboard({
   }
 
   function openItemModal(item?: Item) {
+    if (itemsQuery.isPending) return;
     setItemError("");
     setEditingItem(item ?? null);
     setItemTitle(item?.title ?? "");
     setQuantity(item?.quantity ?? 1);
-    itemModalListIdRef.current = activeListId;
+    setItemModalListId(activeListId);
     setIsItemModalOpen(true);
   }
 
   function closeItemModal() {
     if (!isCreatingItem) {
       setIsItemModalOpen(false);
-      itemModalListIdRef.current = null;
+      setItemModalListId(null);
     }
   }
 
@@ -153,6 +169,7 @@ export function Dashboard({
     setListError("");
     setEditedListName("");
     setHasEditedListName(false);
+    setListModalListId(activeListId);
     setIsListModalOpen(true);
   }
 
@@ -173,11 +190,19 @@ export function Dashboard({
 
   async function saveItem(event: React.FormEvent) {
     event.preventDefault();
-    if (!activeListId || isCreatingItem) return;
+    const itemListId = itemModalListId;
+    if (
+      !itemListId ||
+      itemListId !== activeListId ||
+      !selectableLists.some((list) => list.id === itemListId) ||
+      itemsQuery.isPending ||
+      isCreatingItem
+    )
+      return;
     setItemError("");
     try {
       await mutations.saveItem.mutateAsync({
-        listId: activeListId,
+        listId: itemListId,
         item: {
           id: editingItem?.id,
           title: itemTitle,
@@ -187,7 +212,7 @@ export function Dashboard({
       setItemTitle("");
       setQuantity(1);
       setEditingItem(null);
-      itemModalListIdRef.current = null;
+      setItemModalListId(null);
       setIsItemModalOpen(false);
     } catch (cause) {
       setItemError(
@@ -236,11 +261,18 @@ export function Dashboard({
 
   async function updateList(event: React.FormEvent) {
     event.preventDefault();
-    if (!activeListId || isSavingList) return;
+    const listId = listModalListId;
+    if (
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
+      isSavingList
+    )
+      return;
     setListError("");
     try {
       await mutations.updateList.mutateAsync({
-        listId: activeListId,
+        listId,
         name: effectiveEditedListName,
       });
     } catch (cause) {
@@ -252,12 +284,19 @@ export function Dashboard({
 
   async function addMember(event: React.FormEvent) {
     event.preventDefault();
-    if (!activeListId || isManagingMember) return;
+    const listId = listModalListId;
+    if (
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
+      isManagingMember
+    )
+      return;
     setListError("");
     setInviteMessage("");
     try {
       const invitation = await mutations.createInvitation.mutateAsync({
-        listId: activeListId,
+        listId,
         email: memberEmail,
       });
       setMemberEmail("");
@@ -281,8 +320,11 @@ export function Dashboard({
   }
 
   async function removeMember(memberId: string) {
+    const listId = listModalListId;
     if (
-      !activeListId ||
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
       isManagingMember ||
       !window.confirm("このメンバーを除外しますか？")
     )
@@ -290,7 +332,7 @@ export function Dashboard({
     setListError("");
     try {
       await mutations.removeMember.mutateAsync({
-        listId: activeListId,
+        listId,
         memberId,
       });
     } catch (cause) {
@@ -301,13 +343,16 @@ export function Dashboard({
   }
 
   async function leaveList() {
+    const listId = listModalListId;
     if (
-      !activeListId ||
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
       isManagingMember ||
       !window.confirm("このリストから退会しますか？")
     )
       return;
-    const leavingListId = activeListId;
+    const leavingListId = listId;
     setListError("");
     setSelectedListId("");
     setIsListModalOpen(false);
@@ -324,15 +369,18 @@ export function Dashboard({
   }
 
   async function deleteList() {
+    const listId = listModalListId;
     if (
-      !activeListId ||
+      !listId ||
+      listId !== activeListId ||
+      !selectableLists.some((list) => list.id === listId) ||
       isSavingList ||
       !window.confirm(
         "このリストと全アイテムを削除しますか？この操作は取り消せません。",
       )
     )
       return;
-    const deletingListId = activeListId;
+    const deletingListId = listId;
     setListError("");
     setSelectedListId("");
     setIsListModalOpen(false);
@@ -358,10 +406,12 @@ export function Dashboard({
     try {
       await clearItemCacheForUser(userId);
     } catch (cause) {
-      console.warn(
-        "Unable to clear the local item cache during logout",
-        cause,
+      setError(
+        cause instanceof Error
+          ? `ログアウト時にローカルキャッシュを削除できませんでした: ${cause.message}`
+          : "ログアウト時にローカルキャッシュを削除できませんでした",
       );
+      return;
     }
     window.location.reload();
   }
@@ -464,7 +514,10 @@ export function Dashboard({
                 (item) => item.is_completed === showCompleted,
               )}
               showCompleted={showCompleted}
-              isLoading={itemsQuery.isLoading && !itemsQuery.data}
+              isLoading={
+                (itemsQuery.isCacheRestoring || itemsQuery.isPending) &&
+                !itemsQuery.data
+              }
               isRefreshing={itemsQuery.isFetching && Boolean(items.length)}
               error={
                 itemError ||
@@ -505,7 +558,7 @@ export function Dashboard({
           +
         </button>
       )}
-      {isItemModalOpen && (
+      {isItemModalForActiveList && (
         <ItemModal
           editingItem={editingItem}
           itemTitle={itemTitle}
@@ -519,7 +572,7 @@ export function Dashboard({
           onQuantityChange={setQuantity}
         />
       )}
-      {isListModalOpen && (
+      {isListModalForActiveList && (
         <ListSettingsModal
           userId={userId}
           listDetails={listDetails}
@@ -531,7 +584,7 @@ export function Dashboard({
           invitationUrl={invitationUrl}
           isSavingList={isSavingList}
           isManagingMember={isManagingMember}
-          onClose={() => setIsListModalOpen(false)}
+          onClose={closeListModal}
           onUpdateList={updateList}
           onEditedListNameChange={(value) => {
             setHasEditedListName(true);
