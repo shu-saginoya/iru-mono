@@ -339,11 +339,11 @@ export function Dashboard({
     queryClient.clear();
     try {
       await clearItemCacheForUser(userId);
-    } catch {
-      setError(
-        "ログアウトしましたが、端末内キャッシュを削除できませんでした。接続中の他のタブを閉じてから再試行してください。",
+    } catch (cause) {
+      console.warn(
+        "Unable to clear the local item cache during logout",
+        cause,
       );
-      return;
     }
     window.location.reload();
   }

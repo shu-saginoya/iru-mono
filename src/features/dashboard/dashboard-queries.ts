@@ -42,12 +42,16 @@ export const dashboardQueryKeys = {
 };
 
 export const dashboardMutationKeys = {
+  lists: (userId: string) =>
+    ["dashboard", userId, "mutations", "lists"] as const,
+  items: (userId: string) =>
+    ["dashboard", userId, "mutations", "items"] as const,
   saveItem: (userId: string) =>
-    ["dashboard", userId, "mutations", "save-item"] as const,
+    [...dashboardMutationKeys.items(userId), "save"] as const,
   toggleItem: (userId: string) =>
-    ["dashboard", userId, "mutations", "toggle-item"] as const,
+    [...dashboardMutationKeys.items(userId), "toggle"] as const,
   deleteItem: (userId: string) =>
-    ["dashboard", userId, "mutations", "delete-item"] as const,
+    [...dashboardMutationKeys.items(userId), "delete"] as const,
 };
 
 async function getRequestError(response: Response, fallback: string) {
@@ -94,7 +98,7 @@ async function requestEmpty(
   if (!response.ok) throw new Error(await getRequestError(response, fallback));
 }
 
-export async function fetchAllItems(listId: string) {
+export async function fetchAllItems(userId: string, listId: string) {
   const pageSize = 100;
   const items: Item[] = [];
   let offset = 0;
@@ -115,7 +119,52 @@ export async function fetchAllItems(listId: string) {
     if (!data.items.length) break;
   } while (offset < total);
 
+  await writeItemCache(userId, listId, items);
   return items;
+}
+
+function mutationKeyMatches(
+  candidate: readonly unknown[] | undefined,
+  prefix: readonly unknown[],
+) {
+  return prefix.every((part, index) => candidate?.[index] === part);
+}
+
+async function invalidateAfterMutationsSettle(
+  queryClient: QueryClient,
+  mutationKey: readonly unknown[],
+  queryKey: readonly unknown[],
+  matchesVariables: (variables: unknown) => boolean = () => true,
+) {
+  const countPendingMutations = () =>
+    queryClient
+      .getMutationCache()
+      .getAll()
+      .filter(
+      (mutation) =>
+        mutation.state.status === "pending" &&
+        mutationKeyMatches(mutation.options.mutationKey, mutationKey) &&
+        matchesVariables(mutation.state.variables),
+      ).length;
+  const initialPendingCount = countPendingMutations();
+  if (initialPendingCount <= 1) {
+    await queryClient.invalidateQueries({ queryKey, exact: true });
+    return;
+  }
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  if (countPendingMutations() <= 1) {
+    await queryClient.invalidateQueries({ queryKey, exact: true });
+  }
+}
+
+function mutationHasListId(variables: unknown, listId: string) {
+  return (
+    typeof variables === "object" &&
+    variables !== null &&
+    "listId" in variables &&
+    variables.listId === listId
+  );
 }
 
 export function rollbackItemCreate(items: Item[], optimisticId: string) {
@@ -257,13 +306,9 @@ export function useItemsQuery(userId: string, listId: string) {
 
   const query = useQuery({
     queryKey,
-    queryFn: () => fetchAllItems(listId),
+    queryFn: () => fetchAllItems(userId, listId),
     enabled: Boolean(listId),
   });
-
-  useEffect(() => {
-    if (listId && query.data) void writeItemCache(userId, listId, query.data);
-  }, [listId, query.data, userId]);
 
   return query;
 }
@@ -295,6 +340,7 @@ export function useDashboardMutations(userId: string) {
     );
 
   const createList = useMutation({
+    mutationKey: dashboardMutationKeys.lists(userId),
     mutationFn: (name: string) =>
       requestJson<{ list: ShoppingList }>(
         "/lists",
@@ -328,7 +374,11 @@ export function useDashboardMutations(userId: string) {
       );
     },
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: listsKey, exact: true }),
+      invalidateAfterMutationsSettle(
+        queryClient,
+        dashboardMutationKeys.lists(userId),
+        listsKey,
+      ),
   });
 
   const saveItem = useMutation({
@@ -394,9 +444,13 @@ export function useDashboardMutations(userId: string) {
       );
     },
     onSettled: (_data, _error, variables) =>
-      queryClient.invalidateQueries({
-        queryKey: dashboardQueryKeys.items(userId, variables.listId),
-      }),
+      invalidateAfterMutationsSettle(
+        queryClient,
+        dashboardMutationKeys.items(userId),
+        dashboardQueryKeys.items(userId, variables.listId),
+        (pendingVariables) =>
+          mutationHasListId(pendingVariables, variables.listId),
+      ),
   });
 
   const toggleItem = useMutation({
@@ -434,9 +488,13 @@ export function useDashboardMutations(userId: string) {
       );
     },
     onSettled: (_data, _error, variables) =>
-      queryClient.invalidateQueries({
-        queryKey: dashboardQueryKeys.items(userId, variables.listId),
-      }),
+      invalidateAfterMutationsSettle(
+        queryClient,
+        dashboardMutationKeys.items(userId),
+        dashboardQueryKeys.items(userId, variables.listId),
+        (pendingVariables) =>
+          mutationHasListId(pendingVariables, variables.listId),
+      ),
   });
 
   const deleteItem = useMutation({
@@ -472,12 +530,17 @@ export function useDashboardMutations(userId: string) {
       }
     },
     onSettled: (_data, _error, variables) =>
-      queryClient.invalidateQueries({
-        queryKey: dashboardQueryKeys.items(userId, variables.listId),
-      }),
+      invalidateAfterMutationsSettle(
+        queryClient,
+        dashboardMutationKeys.items(userId),
+        dashboardQueryKeys.items(userId, variables.listId),
+        (pendingVariables) =>
+          mutationHasListId(pendingVariables, variables.listId),
+      ),
   });
 
   const updateList = useMutation({
+    mutationKey: dashboardMutationKeys.lists(userId),
     mutationFn: ({ listId, name }: { listId: string; name: string }) =>
       requestJson<{ list: ShoppingList }>(
         `/lists/${listId}`,
@@ -560,10 +623,11 @@ export function useDashboardMutations(userId: string) {
     },
     onSettled: (_data, _error, variables) =>
       Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: listsKey,
-          exact: true,
-        }),
+        invalidateAfterMutationsSettle(
+          queryClient,
+          dashboardMutationKeys.lists(userId),
+          listsKey,
+        ),
         queryClient.invalidateQueries({
           queryKey: dashboardQueryKeys.listDetails(userId, variables.listId),
           exact: true,
@@ -598,6 +662,7 @@ export function useDashboardMutations(userId: string) {
   });
 
   const leaveList = useMutation({
+    mutationKey: dashboardMutationKeys.lists(userId),
     mutationFn: (listId: string) =>
       requestEmpty(
         `/lists/${listId}/membership`,
@@ -625,10 +690,15 @@ export function useDashboardMutations(userId: string) {
       }
     },
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: listsKey, exact: true }),
+      invalidateAfterMutationsSettle(
+        queryClient,
+        dashboardMutationKeys.lists(userId),
+        listsKey,
+      ),
   });
 
   const deleteList = useMutation({
+    mutationKey: dashboardMutationKeys.lists(userId),
     mutationFn: (listId: string) =>
       requestEmpty(
         `/lists/${listId}`,
@@ -656,7 +726,11 @@ export function useDashboardMutations(userId: string) {
       }
     },
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: listsKey, exact: true }),
+      invalidateAfterMutationsSettle(
+        queryClient,
+        dashboardMutationKeys.lists(userId),
+        listsKey,
+      ),
   });
 
   return {

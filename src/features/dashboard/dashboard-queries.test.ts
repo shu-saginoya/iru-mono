@@ -13,6 +13,7 @@ import type { Item } from "./item-state";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("dashboard query keys", () => {
@@ -28,6 +29,7 @@ describe("dashboard query keys", () => {
 
 describe("fetchAllItems", () => {
   it("combines all API pages into one item list", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const firstPage = Array.from({ length: 100 }, (_, index) => ({
       id: `item-${index}`,
       title: `item ${index}`,
@@ -60,7 +62,7 @@ describe("fetchAllItems", () => {
       });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(fetchAllItems("list-1")).resolves.toEqual([
+    await expect(fetchAllItems("user-a", "list-1")).resolves.toEqual([
       ...firstPage,
       ...secondPage,
     ]);

@@ -13,6 +13,9 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
             refetchOnWindowFocus: true,
             retry: 1,
           },
+          mutations: {
+            networkMode: "always",
+          },
         },
       }),
   );
