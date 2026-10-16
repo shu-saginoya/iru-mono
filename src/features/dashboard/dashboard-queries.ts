@@ -341,7 +341,8 @@ export function useItemsQuery(userId: string, listId: string) {
 
     void readItemCache(userId, listId).then((cachedItems) => {
       if (active && cachedItems && !queryClient.getQueryData(cacheKey)) {
-        queryClient.setQueryData(cacheKey, cachedItems);
+        // updatedAt: 0 で古いデータ扱いにし、表示後にAPIと同期する
+        queryClient.setQueryData(cacheKey, cachedItems, { updatedAt: 0 });
       }
       if (active) setRestoredCacheIdentity(cacheIdentity);
     });

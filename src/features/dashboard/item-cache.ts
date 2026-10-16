@@ -138,6 +138,7 @@ export async function writeItemCache(
 }
 
 export async function clearItemCacheForUser(userId: string) {
+  if (typeof indexedDB === "undefined") return;
   const database = await getDatabase();
   try {
     await new Promise<void>((resolve, reject) => {

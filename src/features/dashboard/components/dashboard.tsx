@@ -88,7 +88,8 @@ export function Dashboard({
       setItemError("");
       setItemModalListId(null);
     }
-    if (listModalListId && listModalListId !== activeListId) {
+    // 操作中に非表示にしたモーダルは、失敗時の復元用に対象IDを保持する
+    if (isListModalOpen && listModalListId !== activeListId) {
       closeListModal();
     }
   }
@@ -359,6 +360,7 @@ export function Dashboard({
     try {
       await mutations.leaveList.mutateAsync(leavingListId);
       localStorage.removeItem(lastListKey);
+      closeListModal();
     } catch (cause) {
       setSelectedListId(leavingListId);
       setIsListModalOpen(true);
@@ -387,6 +389,7 @@ export function Dashboard({
     try {
       await mutations.deleteList.mutateAsync(deletingListId);
       localStorage.removeItem(lastListKey);
+      closeListModal();
     } catch (cause) {
       setSelectedListId(deletingListId);
       setIsListModalOpen(true);
